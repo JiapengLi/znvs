@@ -14,28 +14,28 @@
     } while (0)
 static uint8_t ours[FLASH_SIZE], upstream[FLASH_SIZE], cross1[FLASH_SIZE], cross2[FLASH_SIZE];
 static uint16_t wbs;
-static int rd(void *a, uint32_t off, void *p, size_t n)
+static int rd(void *a, uint32_t addr, void *p, size_t n)
 {
-    REQUIRE(off <= FLASH_SIZE && n <= FLASH_SIZE - off);
-    memcpy(p, (uint8_t *)a + off, n);
+    REQUIRE(addr <= FLASH_SIZE && n <= FLASH_SIZE - addr);
+    memcpy(p, (uint8_t *)a + addr, n);
     return 0;
 }
-static int wr(void *a, uint32_t off, const void *p, size_t n)
+static int wr(void *a, uint32_t addr, const void *p, size_t n)
 {
     uint8_t *d = a;
     const uint8_t *s = p;
     size_t i;
-    REQUIRE(off <= FLASH_SIZE && n <= FLASH_SIZE - off && off % wbs == 0 && n % wbs == 0);
+    REQUIRE(addr <= FLASH_SIZE && n <= FLASH_SIZE - addr && addr % wbs == 0 && n % wbs == 0);
     for (i = 0; i < n; ++i) {
-        REQUIRE((d[off + i] & s[i]) == s[i]);
-        d[off + i] &= s[i];
+        REQUIRE((d[addr + i] & s[i]) == s[i]);
+        d[addr + i] &= s[i];
     }
     return 0;
 }
-static int er(void *a, uint32_t off, size_t n)
+static int er(void *a, uint32_t addr, size_t n)
 {
-    REQUIRE(off <= FLASH_SIZE && n <= FLASH_SIZE - off && off % 512 == 0 && n % 512 == 0);
-    memset((uint8_t *)a + off, 0xff, n);
+    REQUIRE(addr <= FLASH_SIZE && n <= FLASH_SIZE - addr && addr % 512 == 0 && n % 512 == 0);
+    memset((uint8_t *)a + addr, 0xff, n);
     return 0;
 }
 static void compare_reads(znvs_t *a, struct nvs_fs *b)

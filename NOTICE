@@ -28,14 +28,15 @@ https://github.com/JiapengLi/zat
 Standalone implementation:
 - Replaced the sector ring with two-bank snapshot publication and duplicate
   complemented bank headers. The media format is specific to this library.
-- Added complemented record metadata with a separate CRC32, an independent
+- Added compact ID/length metadata with a separate CRC32, an independent
   commit block, and ID/length-bound payload CRC32.
-- Preserve reservations after interrupted programming; validate committed
-  metadata before key lookup, including deletion records.
+- Derive payload addresses from the contiguous committed prefix. Seal the bank
+  after interrupted programming and collect before appending further records.
+- Validate committed metadata before key lookup, including deletion records.
 - Check live-data capacity before erase and verify payload CRC during GC.
 - Removed Zephyr kernel, device, flash, logging, Kconfig and errno dependencies.
 - Use synchronous partition-relative callbacks, caller-owned instances and
-  application-level serialization, without dynamic allocation.
+  copied configuration and application-level serialization, without dynamic allocation.
 - Provide full, boot and readonly builds sharing one public ABI and media
   format, with runtime flash geometry and fixed CRC32 and I/O buffers.
 

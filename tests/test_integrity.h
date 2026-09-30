@@ -7,7 +7,7 @@ static void integrity_put32(uint8_t *p, uint32_t value)
     }
 }
 
-static void integrity_metadata_fault(const znvs_cfg_t *cfg, uint32_t metadata, unsigned bit, int paired)
+static void integrity_metadata_fault(const znvs_cfg_t *cfg, uint32_t metadata, unsigned bit, unsigned second)
 {
     znvs_t fs;
     size_t len;
@@ -16,8 +16,8 @@ static void integrity_metadata_fault(const znvs_cfg_t *cfg, uint32_t metadata, u
     flash = saved;
     CHECK(znvs_init(&fs, cfg, &flash) == 0);
     bytes(&flash)[metadata + bit / 8] ^= mask;
-    if (paired) {
-        bytes(&flash)[metadata + 8 + bit / 8] ^= mask;
+    if (second < 64) {
+        bytes(&flash)[metadata + second / 8] ^= (uint8_t)(1U << (second & 7));
     }
     writes = flash.writes;
     erases = flash.erases;
@@ -32,7 +32,7 @@ static void test_integrity_metadata(void)
 {
     static const char *names[] = {"integrity/metadata/new-value", "integrity/metadata/updated-value", "integrity/metadata/deletion"};
     znvs_t fs;
-    unsigned w, kind, bit;
+    unsigned w, kind, bit, second;
     uint32_t metadata;
     for (w = 1; w <= 32; w *= 2) {
         znvs_cfg_t cfg = config(1024, 2, (uint16_t)w);
@@ -51,13 +51,15 @@ static void test_integrity_metadata(void)
             }
             metadata = fs.pos.ate;
             saved = flash;
-            for (bit = 0; bit < 160; ++bit) {
-                integrity_metadata_fault(&cfg, metadata, bit, 0);
-            }
-            /* These preserve the complement encoding. The metadata CRC must
-             * reject them, including delete 7 -> 6 and NEW -> OLD addresses. */
             for (bit = 0; bit < 64; ++bit) {
-                integrity_metadata_fault(&cfg, metadata, bit, 1);
+                integrity_metadata_fault(&cfg, metadata, bit, 64);
+            }
+            /* Every pair across ID, length and checksum must be detected;
+             * corrupt lengths must never redirect the implicit data cursor. */
+            for (bit = 0; bit < 64; ++bit) {
+                for (second = bit + 1; second < 64; ++second) {
+                    integrity_metadata_fault(&cfg, metadata, bit, second);
+                }
             }
         }
     }
@@ -92,7 +94,7 @@ static void test_integrity_minimum_bank(void)
     test_name = "integrity/geometry/exact-minimum-bank";
     for (w = 1; w <= 32; w *= 2) {
         znvs_cfg_t cfg = config(1024, 2, (uint16_t)w);
-        uint32_t metadata = (20U + w - 1U) & ~(w - 1U);
+        uint32_t metadata = (8U + w - 1U) & ~(w - 1U);
         uint32_t crc = (4U + w - 1U) & ~(w - 1U);
         cfg.erase_size = 1;
         cfg.size = 2U * (32U + metadata + 2U * w + crc);
@@ -120,7 +122,7 @@ static void test_integrity_foreign_header(void)
 {
     znvs_cfg_t cfg = config(1024, 2, 4);
     znvs_t fs;
-    unsigned populated, off;
+    unsigned populated, addr;
     uint64_t writes, erases;
     uint32_t magic = UINT32_C(0xdeadbeef);
     test_name = "integrity/format/reject-foreign-signature-without-mutation";
@@ -130,11 +132,11 @@ static void test_integrity_foreign_header(void)
         if (populated) {
             CHECK(znvs_write(&fs, 7, "KEEP", 5) == 0);
         }
-        for (off = 0; off < 32; off += 16) {
-            integrity_put32(bytes(&flash) + off, magic);
-            integrity_put32(bytes(&flash) + off + 4, 0);
-            integrity_put32(bytes(&flash) + off + 8, ~magic);
-            integrity_put32(bytes(&flash) + off + 12, UINT32_MAX);
+        for (addr = 0; addr < 32; addr += 16) {
+            integrity_put32(bytes(&flash) + addr, magic);
+            integrity_put32(bytes(&flash) + addr + 4, 0);
+            integrity_put32(bytes(&flash) + addr + 8, ~magic);
+            integrity_put32(bytes(&flash) + addr + 12, UINT32_MAX);
         }
         saved = flash;
         writes = flash.writes;
@@ -151,14 +153,14 @@ static void test_integrity_sequence(void)
     znvs_cfg_t cfg = config(1024, 2, 4);
     znvs_t fs;
     uint32_t sequence = UINT32_MAX - 1U;
-    unsigned off;
+    unsigned addr;
     test_name = "integrity/sequence/UINT32_MAX-wrap";
     fresh(&flash, &cfg);
     CHECK(znvs_init(&fs, &cfg, &flash) == 0);
     CHECK(znvs_write(&fs, 7, "KEEP", 5) == 0);
-    for (off = 0; off < 32; off += 16) {
-        integrity_put32(bytes(&flash) + fs.bank + off + 4, sequence);
-        integrity_put32(bytes(&flash) + fs.bank + off + 12, ~sequence);
+    for (addr = 0; addr < 32; addr += 16) {
+        integrity_put32(bytes(&flash) + fs.bank + addr + 4, sequence);
+        integrity_put32(bytes(&flash) + fs.bank + addr + 12, ~sequence);
     }
     CHECK(znvs_mount(&fs) == 0 && fs.sequence == UINT32_MAX - 1U);
     CHECK(znvs_rotate(&fs) == 0);

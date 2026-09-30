@@ -13,6 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = [("full", {"PROFILE": 0}), ("boot", {"PROFILE": 1}), ("readonly", {"PROFILE": 2})]
+PUBLIC_APIS = {"znvs_" + name for name in ("init", "mount", "format", "write", "delete", "read", "read_hist", "max_size", "available", "rotate", "arg")}
 
 
 def run(cmd):
@@ -57,7 +58,7 @@ def stack_analysis(su, assembly):
 
     estimates = {}
     for name in sorted(frames):
-        if name.startswith("znvs_"):
+        if name in PUBLIC_APIS:
             total, path = longest(name)
             estimates[name] = {"local_stack_bound": total, "path": path}
     return estimates, sorted(external)

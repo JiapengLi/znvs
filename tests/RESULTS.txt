@@ -3,59 +3,69 @@ Date: 2026-09-30
 
 CONFIGURATION
 Builds: full / boot / readonly; shared public ABI and flash format.
-Fixed CRC32, runtime geometry, no heap or persistent lookup cache.
+Fixed CRC32, runtime geometry, owned config copy, no heap or persistent lookup cache.
+8-byte ID/length/CRC32 metadata, separate commit unit, implicit payload addresses.
+Uncommitted nonempty tails seal the bank; the next mutating write collects it.
 
 SOURCE SHA-256
-  znvs/znvs.c: a2b9423440e68694380eaa3d05be292a6e9b7eb451e592fca858239f1be89036
-  znvs/znvs.h: 88d756c49c771e0e856441527a7477117c1b88aa094792789d6f57e5f994e1f6
+  znvs/znvs.c: 7fd54c23af9caf280a9edbe469bd5e589a21447e5b7dfc4a08d5b2fc24ded056
+  znvs/znvs.h: 7970f9d7523a97df2fd980b455b5f2781062c6d5e0b5531890d9a430f70ae71b
 
 HOST TESTS
 gcc (Rev3, Built by MSYS2 project) 16.2.0
-Command: python tools/check.py --cc gcc --out _build/first-release/matrix
+Command: python tools/check.py --cc gcc --out _build/compact/final-matrix
 NOR faults: prefix cuts and arbitrary subsets of bits in failed write/erase operations.
 Write granules: 1, 2, 4, 8, 16, 32 bytes.
-Coverage: metadata/payload corruption, interrupted initialization and GC,
-reserved space, deletion, full media, mismatched geometry, foreign signatures,
-sequence wrap, and full/boot/readonly interoperability.
+Coverage: metadata/payload corruption, interrupted initialization and GC, sealed tails,
+deletion, full media, mismatched geometry, foreign signatures, sequence wrap,
+temporary/modified caller config and full/boot/readonly interoperability.
+Committed metadata: all 64 single-bit and 2016 two-bit faults per record kind and granule.
+Includes legal partial programming that leaves CRC-valid but false ID/length metadata.
 
-ZNVS test: fixed CRC32, sizeof(znvs_t)=40 cfg=40
-PASS checks=52950343 random_operations=32400 fault_scenarios=101070
+ZNVS test: fixed CRC32, sizeof(znvs_t)=72 cfg=40
+PASS checks=54246494 random_operations=32400 fault_scenarios=131015
 
 PASS upstream v4.4.2 host-adapted CRC32: 7200 logical-value comparisons, 396 remount/foreign-format rejection checks
 
-PASS profiles: 1800 alternating full/boot writes, read-only checks, 11936 unordered boot-GC failures across 6 write geometries
+PASS profiles: 1800 alternating full/boot writes, read-only checks, 11168 unordered boot-GC failures across 6 write geometries
 
-Fault scenarios: 101070 main + 11936 boot-GC = 113006; sanitizer repeats are not added.
+Fault scenarios: 131015 main + 11168 boot-GC = 142183; sanitizer repeats are not added.
 
 SANITIZERS
 clang version 22.1.8 (https://github.com/msys2/MINGW-packages 6e4e79c2f86eeb534e324e583f2057dc9fd5ecab)
-Command: python tools/check.py --cc clang --sanitize-only --out _build/first-release/sanitize
+Command: python tools/check.py --cc clang --sanitize-only --out _build/compact/final-sanitize
 
-ZNVS test: fixed CRC32, sizeof(znvs_t)=40 cfg=40
-PASS checks=52950343 random_operations=32400 fault_scenarios=101070
+ZNVS test: fixed CRC32, sizeof(znvs_t)=72 cfg=40
+PASS checks=54246494 random_operations=32400 fault_scenarios=131015
 
-PASS profiles: 1800 alternating full/boot writes, read-only checks, 11936 unordered boot-GC failures across 6 write geometries
+PASS profiles: 1800 alternating full/boot writes, read-only checks, 11168 unordered boot-GC failures across 6 write geometries
 
-BUILD
-PASS: Make full library, example and test; CMake configure/build and ctest 1/1.
-PASS: all three profiles compile in the host matrix; strict C99 warnings.
-PASS: clang-format and git diff --check. Files use LF.
+BUILD AND STYLE
+PASS: Make full/boot/readonly libraries and full example; example executed.
+PASS: CMake Ninja configure/build for all profiles, full host test executable linked.
+PASS: C++11 public header, linked and executed with each C profile.
+PASS: Clang Cortex-M3 static analysis for all three profiles, no diagnostics.
+PASS: modified/new C/h clang-format, git diff --check, existing LF retained.
+PASS: 29 private functions use znvs_; all owned library macros/enumerators use ZNVS_.
+Logs: _build/compact/final-build/logs/.
 
 CORTEX-M3 SIZE / MODULE-LOCAL STACK
 clang version 22.1.8 (https://github.com/msys2/MINGW-packages 6e4e79c2f86eeb534e324e583f2057dc9fd5ecab)
-Command: python tools/measure.py --clang clang --size llvm-size --nm llvm-nm --max-boot-rom 2096
+Command: python tools/measure.py --clang clang --size llvm-size --nm llvm-nm --out _build/compact/final-measure
 Flags: Cortex-M3 Thumb, -std=c99 -Oz -ffreestanding -fno-builtin; link -flto --gc-sections.
 Linked roots: init/read/write/delete for RW; init/read for RO.
 
-full: ROM=2544 (module=2484 + support=60), object_text=3018, instance=32, cfg=24
-  znvs_write local stack bound=376; static data=0, bss=0
-boot: ROM=2096 (module=2064 + support=32), object_text=2272, instance=32, cfg=24
-  znvs_write local stack bound=280; static data=0, bss=0
-readonly: ROM=982 (module=982 + support=0), object_text=1130, instance=32, cfg=24
-  znvs_read local stack bound=136; static data=0, bss=0
+full: ROM=2628 (module=2568 + support=60), object_text=3032, instance=52, cfg=24
+  znvs_write local stack bound=368; static data=0, bss=0
+boot: ROM=2144 (module=2112 + support=32), object_text=2294, instance=52, cfg=24
+  znvs_write local stack bound=272; static data=0, bss=0
+readonly: ROM=972 (module=972 + support=0), object_text=1056, instance=52, cfg=24
+  znvs_read local stack bound=144; static data=0, bss=0
 
+Boot exceeds a strict 2048-byte budget by 96 bytes.
 ROM includes ARM unwind data and separately compiled size-only C support.
 Flash port, startup, vectors and application buffers are excluded.
+Instance RAM includes the config copy: ARM 52 bytes; host x86-64 72 bytes.
 Stack is a compiler-frame bound for local calls, excluding driver/libc/interrupt stacks.
 
 CALLBACK COUNTS
@@ -63,19 +73,30 @@ CALLBACK COUNTS
 Full profile; no prior update history. Counts are not on-device latency.
 
 BENCH configuration: CRC32, no lookup cache, 32-byte I/O/GC buffers
-BENCH keys=8 op=blank-init reads=259 read_bytes=8277 writes=1 erases=0
-BENCH keys=8 op=empty-remount reads=3 read_bytes=85 writes=0 erases=0
-BENCH keys=8 op=read-oldest reads=10 read_bytes=176 writes=0 erases=0
-BENCH keys=8 op=rotate reads=160 read_bytes=4496 writes=33 erases=1
-BENCH keys=32 op=blank-init reads=259 read_bytes=8277 writes=1 erases=0
-BENCH keys=32 op=empty-remount reads=3 read_bytes=85 writes=0 erases=0
-BENCH keys=32 op=read-oldest reads=34 read_bytes=680 writes=0 erases=0
-BENCH keys=32 op=rotate reads=256 read_bytes=5696 writes=129 erases=1
-BENCH keys=64 op=blank-init reads=259 read_bytes=8277 writes=1 erases=0
-BENCH keys=64 op=empty-remount reads=3 read_bytes=85 writes=0 erases=0
-BENCH keys=64 op=read-oldest reads=66 read_bytes=1352 writes=0 erases=0
-BENCH keys=64 op=rotate reads=384 read_bytes=7296 writes=257 erases=1
-BENCH keys=26 op=write-full reads=52 read_bytes=1092 writes=0 erases=0
+BENCH keys=8 op=blank-init reads=259 read_bytes=8265 writes=1 erases=0
+BENCH keys=8 op=empty-remount reads=3 read_bytes=73 writes=0 erases=0
+BENCH keys=8 op=read-oldest reads=10 read_bytes=80 writes=0 erases=0
+BENCH keys=8 op=rotate reads=160 read_bytes=4304 writes=33 erases=1
+BENCH keys=32 op=blank-init reads=259 read_bytes=8265 writes=1 erases=0
+BENCH keys=32 op=empty-remount reads=3 read_bytes=73 writes=0 erases=0
+BENCH keys=32 op=read-oldest reads=34 read_bytes=296 writes=0 erases=0
+BENCH keys=32 op=rotate reads=256 read_bytes=4928 writes=129 erases=1
+BENCH keys=64 op=blank-init reads=259 read_bytes=8265 writes=1 erases=0
+BENCH keys=64 op=empty-remount reads=3 read_bytes=73 writes=0 erases=0
+BENCH keys=64 op=read-oldest reads=66 read_bytes=584 writes=0 erases=0
+BENCH keys=64 op=rotate reads=384 read_bytes=5760 writes=257 erases=1
+BENCH keys=28 op=write-full reads=56 read_bytes=504 writes=0 erases=0
 
-Raw logs and metrics: _build/first-release/ (ignored build artifacts).
+STEADY-STATE WEAR VS UNMODIFIED ZEPHYR NVS v4.4.2
+Same NOR geometry: 2x4096 physical pages, W=4, CRC32, no persistent lookup cache.
+Eight 4-byte keys; 2000 changed warmup updates, then 20000 measured updates.
+Both round-robin-eight and one-hot-seven-cold workloads; final values verified.
+Counts exclude initialization, seeding and warmup:
+  ZNVS: GC interval=196 updates, 102 erases [51,51], 417544 program bytes, 82958 write callbacks.
+  Zephyr: GC interval=247 updates, 81 erases [41,40], 330368 program bytes, 61296 write callbacks.
+  ZNVS: 20.8772 programmed bytes/update; Zephyr: 16.5184 programmed bytes/update.
+  ZNVS still has about 26% higher erase frequency in this workload.
+Source: tests/bench_wear.c; raw callback statistics in final-matrix/wear.log.
+
+Raw logs and metrics: _build/compact/ (ignored build artifacts).
 Host validation does not include on-device power-cut, ECC or driver timing tests.

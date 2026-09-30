@@ -49,11 +49,11 @@ static uint8_t *bytes(flash_t *f)
 {
     return f->raw + GUARD;
 }
-static void bounds(flash_t *f, uint32_t off, size_t len)
+static void bounds(flash_t *f, uint32_t addr, size_t len)
 {
-    CHECK(off <= f->size && len <= f->size - off);
+    CHECK(addr <= f->size && len <= f->size - addr);
 }
-static int unordered_cut(flash_t *f, uint32_t off, const uint8_t *src, size_t len)
+static int unordered_cut(flash_t *f, uint32_t addr, const uint8_t *src, size_t len)
 {
     size_t i;
     if (f->operation_cut < 0) {
@@ -67,18 +67,18 @@ static int unordered_cut(flash_t *f, uint32_t off, const uint8_t *src, size_t le
         f->tear_seed = f->tear_seed * 1664525U + 1013904223U;
         mask = (uint8_t)(f->tear_seed >> 24);
         if (src) {
-            bytes(f)[off + i] &= (uint8_t)(src[i] | mask);
+            bytes(f)[addr + i] &= (uint8_t)(src[i] | mask);
         } else {
-            bytes(f)[off + i] |= mask;
+            bytes(f)[addr + i] |= mask;
         }
     }
     f->dead = 1;
     return 1;
 }
-static int sim_read(void *arg, uint32_t off, void *buf, size_t len)
+static int sim_read(void *arg, uint32_t addr, void *buf, size_t len)
 {
     flash_t *f = (flash_t *)arg;
-    bounds(f, off, len);
+    bounds(f, addr, len);
     ++f->reads;
     f->read_bytes += len;
     if (f->dead || f->read_fail == 0) {
@@ -88,62 +88,62 @@ static int sim_read(void *arg, uint32_t off, void *buf, size_t len)
     if (f->read_fail > 0) {
         --f->read_fail;
     }
-    memcpy(buf, bytes(f) + off, len);
+    memcpy(buf, bytes(f) + addr, len);
     return 0;
 }
-static int sim_write(void *arg, uint32_t off, const void *buf, size_t len)
+static int sim_write(void *arg, uint32_t addr, const void *buf, size_t len)
 {
     flash_t *f = (flash_t *)arg;
     const uint8_t *p = (const uint8_t *)buf;
     size_t i;
-    bounds(f, off, len);
-    CHECK((off % f->write_size) == 0 && (len % f->write_size) == 0);
+    bounds(f, addr, len);
+    CHECK((addr % f->write_size) == 0 && (len % f->write_size) == 0);
     ++f->writes;
     if (f->dead) {
         return -99;
     }
-    if (unordered_cut(f, off, p, len)) {
+    if (unordered_cut(f, addr, p, len)) {
         return -99;
     }
     for (i = 0; i < len; ++i) {
-        CHECK((bytes(f)[off + i] & p[i]) == p[i]);
+        CHECK((bytes(f)[addr + i] & p[i]) == p[i]);
         if (f->cut == 0) {
             /* Selected bit subset of the next byte may also have been programmed. */
-            bytes(f)[off + i] &= (uint8_t)(p[i] | (uint8_t)~f->torn_mask);
+            bytes(f)[addr + i] &= (uint8_t)(p[i] | (uint8_t)~f->torn_mask);
             f->dead = 1;
             return f->positive_error ? 7 : -99;
         }
         if (f->cut > 0) {
             --f->cut;
         }
-        bytes(f)[off + i] &= p[i];
+        bytes(f)[addr + i] &= p[i];
         ++f->mutated;
     }
     return 0;
 }
-static int sim_erase(void *arg, uint32_t off, size_t len)
+static int sim_erase(void *arg, uint32_t addr, size_t len)
 {
     flash_t *f = (flash_t *)arg;
     size_t i;
-    bounds(f, off, len);
-    CHECK((off % f->erase_size) == 0 && (len % f->erase_size) == 0);
+    bounds(f, addr, len);
+    CHECK((addr % f->erase_size) == 0 && (len % f->erase_size) == 0);
     ++f->erases;
     if (f->dead) {
         return -99;
     }
-    if (unordered_cut(f, off, NULL, len)) {
+    if (unordered_cut(f, addr, NULL, len)) {
         return -99;
     }
     for (i = 0; i < len; ++i) {
         if (f->cut == 0) {
-            bytes(f)[off + i] |= f->torn_mask;
+            bytes(f)[addr + i] |= f->torn_mask;
             f->dead = 1;
             return f->positive_error ? 7 : -99;
         }
         if (f->cut > 0) {
             --f->cut;
         }
-        bytes(f)[off + i] = 0xff;
+        bytes(f)[addr + i] = 0xff;
         ++f->mutated;
     }
     return 0;
@@ -199,6 +199,35 @@ static void expect(znvs_t *fs, uint16_t id, const void *data, size_t len)
         CHECK(rc == 0 && n == len && memcmp(data, buf, len) == 0);
     }
 }
+static int init_with_temporary_config(znvs_t *fs, flash_t *device)
+{
+    znvs_cfg_t temporary = config(1024, 2, 4);
+    return znvs_init(fs, &temporary, device);
+}
+static void test_config_copy(void)
+{
+    znvs_cfg_t c = config(1024, 2, 4);
+    znvs_t fs;
+    size_t maximum;
+    test_name = "config/owned-copy-and-stack-lifetime";
+    fresh(&flash, &c);
+    CHECK(znvs_init(&fs, &c, &flash) == 0);
+    maximum = znvs_max_size(&fs);
+    memset(&c, 0, sizeof(c));
+    CHECK(znvs_write(&fs, 7, "KEEP", 5) == 0);
+    CHECK(znvs_mount(&fs) == 0 && znvs_max_size(&fs) == maximum);
+    expect(&fs, 7, "KEEP", 5);
+    CHECK(znvs_rotate(&fs) == 0);
+    expect(&fs, 7, "KEEP", 5);
+    c = config(1024, 2, 4);
+    fresh(&flash, &c);
+    CHECK(init_with_temporary_config(&fs, &flash) == 0);
+    CHECK(znvs_write(&fs, 7, "STACK", 6) == 0);
+    CHECK(znvs_rotate(&fs) == 0);
+    CHECK(znvs_mount(&fs) == 0);
+    expect(&fs, 7, "STACK", 6);
+    guards(&flash);
+}
 static void test_basic(void)
 {
     znvs_cfg_t c = config(1024, 3, 4);
@@ -215,7 +244,7 @@ static void test_basic(void)
     CHECK(znvs_read(&zero, 0, small, sizeof(small), &n) == ZNVS_ESTATE);
     CHECK(znvs_init(&fs, &c, &flash) == 0);
     CHECK(znvs_arg(&fs) == &flash && znvs_arg(NULL) == NULL);
-    CHECK(znvs_max_size(&fs) == c.size / 2U - 32U - 24U - 4U);
+    CHECK(znvs_max_size(&fs) == c.size / 2U - 32U - 12U - 4U);
     CHECK(znvs_available(&fs) <= znvs_max_size(&fs));
     expect(&fs, 0, NULL, 0);
     CHECK(znvs_write(&fs, 0, a, sizeof(a) - 1) == 0);
@@ -622,6 +651,7 @@ int main(void)
     printf("ZNVS test: fixed CRC32, sizeof(znvs_t)=%zu cfg=%zu\n", sizeof(znvs_t), sizeof(znvs_cfg_t));
     fflush(stdout);
     test_basic();
+    test_config_copy();
     test_geometry();
     test_random();
     test_full_and_errors();

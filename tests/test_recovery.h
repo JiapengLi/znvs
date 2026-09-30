@@ -13,7 +13,7 @@ static void test_committed_corruption(void)
     CHECK(znvs_write(&fs, 7, "NEW", 4) == 0);
     saved = flash;
     metadata = fs.pos.ate;
-    for (bit = 0; bit < 128; ++bit) {
+    for (bit = 0; bit < 64; ++bit) {
         flash = saved;
         CHECK(znvs_init(&fs, &c, &flash) == 0);
         bytes(&flash)[metadata + bit / 8] ^= (uint8_t)(1U << (bit % 8));
@@ -25,7 +25,7 @@ static void test_committed_corruption(void)
     CHECK(znvs_delete(&fs, 7) == 0);
     metadata = fs.pos.ate;
     saved = flash;
-    for (bit = 0; bit < 128; ++bit) {
+    for (bit = 0; bit < 64; ++bit) {
         flash = saved;
         CHECK(znvs_init(&fs, &c, &flash) == 0);
         bytes(&flash)[metadata + bit / 8] ^= (uint8_t)(1U << (bit % 8));
@@ -36,7 +36,7 @@ static void test_committed_corruption(void)
     flash = saved;
     for (bit = 0; bit < 8; ++bit) {
         flash = saved;
-        bytes(&flash)[metadata + 20] ^= (uint8_t)(1U << bit);
+        bytes(&flash)[metadata + 8] ^= (uint8_t)(1U << bit);
         CHECK(znvs_init(&fs, &c, &flash) == 0);
         expect(&fs, 7, NULL, 0);
     }
@@ -71,18 +71,18 @@ static void test_committed_corruption(void)
     expect(&fs, 7, "FIX", 4);
 }
 
-static int alias_failure(void *arg, uint32_t off, const void *data, size_t len)
+static int alias_failure(void *arg, uint32_t addr, const void *data, size_t len)
 {
     const uint8_t *src = data;
-    uint8_t partial[20];
-    if (len == 20 && src[0] == 0 && src[1] == 0) {
+    uint8_t partial[8];
+    if (len == 8 && src[0] == 0 && src[1] == 0) {
         memcpy(partial, src, sizeof(partial));
         partial[0] = 0xd9;
         partial[1] = 1;
-        CHECK(sim_write(arg, off, partial, sizeof(partial)) == 0);
+        CHECK(sim_write(arg, addr, partial, sizeof(partial)) == 0);
         return ZNVS_EIO;
     }
-    return sim_write(arg, off, data, len);
+    return sim_write(arg, addr, data, len);
 }
 
 static void test_partial_metadata_alias(void)
@@ -103,6 +103,78 @@ static void test_partial_metadata_alias(void)
     CHECK(znvs_mount(&fs) == 0);
     expect(&fs, 9, "NEXT", 5);
     expect(&fs, 473, "OLD", 4);
+}
+
+static int partial_fixture_enabled;
+
+static int crc_valid_partial_metadata(void *arg, uint32_t addr, const void *data, size_t len)
+{
+    static const uint8_t expected[8] = {0x07, 0x00, 0x04, 0x00, 0xa1, 0x22, 0xff, 0xd8};
+    static const uint8_t partial[8] = {0x0f, 0x46, 0x96, 0x16, 0xf5, 0xa6, 0xff, 0xde};
+    unsigned i;
+    if (partial_fixture_enabled && len == sizeof(expected) && memcmp(data, expected, sizeof(expected)) == 0) {
+        for (i = 0; i < sizeof(expected); ++i) {
+            CHECK((expected[i] & partial[i]) == expected[i]);
+        }
+        CHECK(sim_write(arg, addr, partial, sizeof(partial)) == 0);
+        return ZNVS_EIO;
+    }
+    return sim_write(arg, addr, data, len);
+}
+
+static void test_sealed_tail(void)
+{
+    znvs_cfg_t c = config(1024, 2, 4);
+    znvs_t fs;
+    uint64_t writes, erases;
+    unsigned w;
+    test_name = "recovery/CRC-valid-partial-metadata-must-not-reserve-false-length";
+    c.write = crc_valid_partial_metadata;
+    partial_fixture_enabled = 0;
+    fresh(&flash, &c);
+    CHECK(znvs_init(&fs, &c, &flash) == 0);
+    CHECK(znvs_write(&fs, 7, "OLD", 4) == 0);
+    partial_fixture_enabled = 1;
+    CHECK(znvs_write(&fs, 7, "NEW", 4) == ZNVS_EIO);
+    partial_fixture_enabled = 0;
+    writes = flash.writes;
+    erases = flash.erases;
+    CHECK(znvs_mount(&fs) == 0);
+    CHECK(flash.writes == writes && flash.erases == erases);
+    CHECK(znvs_available(&fs) == 0);
+    expect(&fs, 7, "OLD", 4);
+    expect(&fs, 17935, NULL, 0);
+    CHECK(znvs_write(&fs, 9, "NEXT", 5) == 0);
+    CHECK(flash.erases == erases + 1);
+    expect(&fs, 7, "OLD", 4);
+    expect(&fs, 9, "NEXT", 5);
+    guards(&flash);
+    for (w = 1; w <= 32; w *= 2) {
+        c = config(1024, 2, (uint16_t)w);
+        test_name = "recovery/sealed-partial-payload/committed-prefix-remains-readable";
+        fresh(&flash, &c);
+        CHECK(znvs_init(&fs, &c, &flash) == 0);
+        CHECK(znvs_write(&fs, 7, "OLD", 4) == 0);
+        CHECK(znvs_write(&fs, 6, "COLD-LONGER", 12) == 0);
+        flash.operation_cut = 1;
+        flash.tear_seed = UINT32_C(0x396cf827);
+        memset(bigbuf, 0x96, 33);
+        CHECK(znvs_write(&fs, 7, bigbuf, 33) == ZNVS_EIO);
+        recover_device(&flash);
+        writes = flash.writes;
+        erases = flash.erases;
+        CHECK(znvs_mount(&fs) == 0 && znvs_available(&fs) == 0);
+        CHECK(flash.writes == writes && flash.erases == erases);
+        expect(&fs, 7, "OLD", 4);
+        expect(&fs, 6, "COLD-LONGER", 12);
+        CHECK(znvs_write(&fs, 9, "NEXT", 5) == 0);
+        CHECK(flash.erases == erases + 1);
+        CHECK(znvs_mount(&fs) == 0);
+        expect(&fs, 7, "OLD", 4);
+        expect(&fs, 6, "COLD-LONGER", 12);
+        expect(&fs, 9, "NEXT", 5);
+        guards(&flash);
+    }
 }
 
 static void test_unordered_failures(void)
@@ -221,6 +293,7 @@ static void test_filter_collisions(void)
 static void test_recovery(void)
 {
     test_partial_metadata_alias();
+    test_sealed_tail();
     test_committed_corruption();
     test_unordered_failures();
     test_first_header();

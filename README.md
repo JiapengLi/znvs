@@ -27,18 +27,18 @@ CMake 使用 `-DZNVS_PROFILE=boot` 或 `readonly`。手动编译时，仅对 `zn
 ```c
 #include "znvs/znvs.h"
 
-static const znvs_cfg_t cfg = {
-    .read = flash_read,
-    .write = flash_write,
-    .erase = flash_erase,
-    .size = 8192,
-    .erase_size = 4096,
-    .write_size = 4
-};
 static znvs_t store;
 
 int save_flags(void *flash_context, uint32_t flags)
 {
+    const znvs_cfg_t cfg = {
+        .read = flash_read,
+        .write = flash_write,
+        .erase = flash_erase,
+        .size = 8192,
+        .erase_size = 4096,
+        .write_size = 4
+    };
     int rc = znvs_init(&store, &cfg, flash_context);
     if (rc != ZNVS_OK) {
         return rc;
@@ -47,17 +47,17 @@ int save_flags(void *flash_context, uint32_t flags)
 }
 ```
 
-回调签名如下，偏移相对于分区起点：
+回调签名如下，`addr` 是相对于分区起点的字节地址：
 
 ```c
-int flash_read(void *arg, uint32_t off, void *buf, size_t len);
-int flash_write(void *arg, uint32_t off, const void *buf, size_t len);
-int flash_erase(void *arg, uint32_t off, size_t len);
+int flash_read(void *arg, uint32_t addr, void *buf, size_t len);
+int flash_write(void *arg, uint32_t addr, const void *buf, size_t len);
+int flash_erase(void *arg, uint32_t addr, size_t len);
 ```
 
 回调必须同步完成整次操作后返回 0，任意非零值转换为 `ZNVS_EIO`。读取允许任意偏移、长度；写入地址和长度按 `write_size` 对齐，源指针可能不对齐。驱动负责跨页拆分、等待完成、超时、源指针对齐、缓存/DMA 一致性及物理分区边界保护。
 
-介质须为擦除值 `0xff`、编程只允许 1→0 的 NOR。擦除单元为 2 的幂；编程粒度支持 1、2、4、8、16、32 B。两个区必须等大、按擦除和编程粒度对齐，并能容纳区头与记录。`cfg` 须始终有效且不可修改，宜使用 `static const`。
+介质须为擦除值 `0xff`、编程只允许 1→0 的 NOR。擦除单元为 2 的幂；编程粒度支持 1、2、4、8、16、32 B。两个区必须等大、按擦除和编程粒度对齐，并能容纳区头与记录。`znvs_init` 将完整配置复制到实例中，调用返回后原 `cfg` 可以修改或离开作用域。`arg` 指向的驱动上下文仍须在实例使用期间有效。
 
 同一分区只能有一个活动写实例。包括读取在内的所有操作都须由应用串行化，回调不得重入，也不是 ISR API。其他程序或实例修改分区后，旧实例必须重新挂载；应用与 bootloader 交接时也适用。不同分区共用 Flash 硬件的访问由驱动协调。
 
@@ -81,7 +81,9 @@ ID 为 `0..65534`。`znvs_read(data=NULL, capacity=0, length!=NULL)` 查询长�
 
 ## 提交与恢复
 
-每条记录先写 20 B 元数据（ID、长度、地址、反码和独立 CRC32），再写载荷及绑定 ID/长度的 CRC32，最后写独立提交单元。已提交元数据在参与查找前校验，包括删除记录；检测到损坏即报错，不跳过坏记录返回旧值。未提交记录保守保留数据范围，避免重用未擦除单元，由 GC 回收。
+每条记录先写 8 B 元数据（16 位 ID、16 位长度、CRC32），再写载荷及绑定 ID/长度的 CRC32，最后写独立提交单元。已提交元数据在参与查找前校验，包括删除记录；检测到损坏即报错，不跳过坏记录返回旧值。载荷顺序连续存放，地址由已提交记录的长度推算，无需逐条存储地址或元数据反码。
+
+挂载遇到非空但未提交的尾记录时，保留可读的已提交前缀并封存当前区，不解析该尾记录的 ID、长度或 CRC。下一次实际改变内容的写入先 GC，`znvs_available` 返回 0。这样不会重用部分编程的区域，也不会因受损的未提交长度使后续记录错位；代价是写入中断后恢复写入可能多一次整区回收。
 
 GC 先检查容量，`ENOSPC` 不写不擦；能容纳才擦除备用区、校验并复制有效值、写待更新值，最后发布两份互补编码的区头，其签名绑定分区大小和编程粒度。旧区保留到下一次 GC。已有有效区时挂载只读；完整构建仅对全空介质或可识别的首次区头写入中断自动初始化，不因普通挂载错误清空分区。
 
@@ -89,17 +91,17 @@ GC 先检查容量，`ENOSPC` 不写不擦；能容纳才擦除备用区、校�
 
 ## 容量、RAM 与 ROM
 
-令 `W` 为编程粒度、`B` 为半分区、`align(n)` 为向上对齐到 W：区头占 32 B，记录槽占 `align(20)+W`，非空载荷占 `align(len)+align(4)`，删除只占记录槽。2×4096 B、W=4 时，最大单值 4036 B，4 B 值占 32 B。
+令 `W` 为编程粒度、`B` 为半分区、`align(n)` 为向上对齐到 W：区头占 32 B，记录槽占 `align(8)+W`，非空载荷占 `align(len)+align(4)`，删除只占记录槽。2×4096 B、W=4 时，最大单值 4048 B，4 B 值占 20 B，删除占 12 B。
 
 以下为 Cortex-M3 Thumb、Clang 22.1.8、`-Oz -flto` 测量，几何在运行时配置：
 
 | 构建 | 链接 ROM，含 C 辅助函数 | 实例 RAM | 模块局部调用链栈估算 |
 | --- | ---: | ---: | ---: |
-| boot | **2096 B，约 2.05 KiB** | 32 B | 写入 ≤280 B |
-| readonly | **982 B** | 32 B | 读取 ≤136 B |
-| full | **2544 B** | 32 B | 写入 ≤376 B |
+| boot | **2144 B，约 2.09 KiB** | 52 B | 写入 ≤272 B |
+| readonly | **972 B** | 52 B | 读取 ≤144 B |
+| full | **2628 B** | 52 B | 写入 ≤368 B |
 
-boot 比严格 2 KiB 多 48 B。测量保留 init/read，以及读写构建的 write/delete；使用其他 API 会改变尺寸。ROM 含 ARM 展开表，不含驱动、启动代码和应用配置；最终固件须启用 LTO，其他 MCU/编译器需重测。32 位 ABI 的配置为 24 B，可置于 ROM；x86-64 实例和配置均为 40 B。栈估算不含驱动、C 库与中断。没有堆分配或整区 RAM 镜像。
+boot 比严格 2 KiB 多 96 B。测量保留 init/read，以及读写构建的 write/delete；使用其他 API 会改变尺寸。ROM 含 ARM 展开表，不含驱动、启动代码和应用配置；最终固件须启用 LTO，其他 MCU/编译器需重测。实例 RAM 已包含完整配置副本（32 位 ABI 为 24 B），不要求应用再常驻一份配置；x86-64 实例为 72 B，配置为 40 B。栈估算不含驱动、C 库与中断。没有堆分配或整区 RAM 镜像。
 
 ## 小键数性能
 
@@ -108,11 +110,27 @@ boot 比严格 2 KiB 多 48 B。测量保留 init/read，以及读写构建的 w
 | 操作 | 8 键 | 32 键 | 64 键 |
 | --- | ---: | ---: | ---: |
 | 有数据重新挂载：读回调 | 11 | 35 | 67 |
-| 读取最早的键：读回调 / 字节 | 10 / 176 B | 34 / 680 B | 66 / 1352 B |
+| 读取最早的键：读回调 / 字节 | 10 / 80 B | 34 / 296 B | 66 / 584 B |
 | GC：读回调 | 160 | 256 | 384 |
 | GC：写回调 / 擦回调 | 33 / 1 | 129 / 1 | 257 / 1 |
 
 这些不是硬件耗时。普通查找为 O(N)，N 是累积记录数；GC 最坏可能二次扫描。逐位 CRC32 节省 ROM，但消耗 CPU。改写为不同的 4 B 值、不触发 GC 时为 4 次写回调；删除已有键为 2 次。真实延迟取决于驱动与器件，不承诺硬实时。
+
+## 擦除均衡与持续更新
+
+两个区交替回收；一个区跨多个物理擦除单元时，这些单元一起擦除。均衡范围仅限本分区，无坏块替换或跨分区磨损管理。冷键随 GC 复制，冷热分离和多扇区环形回收均未实现。
+
+以下与未修改的 Zephyr NVS v4.4.2 算法在同一主机 NOR 模拟器中比较：2×4096 B、W=4、载荷 CRC32 开启、无常驻查找缓存；8 个键各 4 B，预热 2000 次，统计后续 20000 次不同值更新。
+
+| 指标 | ZNVS full | Zephyr NVS |
+| --- | ---: | ---: |
+| 每个 4 B 值的记录空间 | 20 B | 16 B |
+| 稳态相邻 GC 间更新次数 | 196 | 247 |
+| 统计窗口的物理擦除次数 | 102 | 81 |
+| 两个物理单元各自擦除次数 | 51 / 51 | 41 / 40 |
+| 编程字节 / 更新，含 GC | 20.8772 B | 16.5184 B |
+
+轮流更新 8 键与只更新 1 热键、保留 7 冷键两种负载得到相同的擦写计数。此条件下 ZNVS 擦除频率仍比 Zephyr 高约 26%，不能宣称寿命更好。保留的空间开销用于独立提交单元、元数据 CRC32 和双区头；两个库都支持掉电恢复，ZNVS 采用整区快照发布，并在 GC 复制时检查载荷 CRC。可用 `tools/check.py` 复现这些计数，不能将它们直接换算成硬件吞吐率。
 
 ## 验证
 
@@ -129,4 +147,4 @@ ctest --test-dir _build/cmake --output-on-failure
 
 离线工具可指定编译器：`python tools/check.py --cc gcc`、`python tools/check.py --cc clang --sanitize-only`、`python tools/measure.py --clang clang --size llvm-size --nm llvm-nm`。测试覆盖六种编程粒度、随机模型、写擦中断、连续恢复故障、元数据损坏、GC 校验及三种构建互操作。详情见 `tests/RESULTS.txt`。
 
-`.clang-format` 使用 4 空格、控制块花括号、`ColumnLimit: 0`。来源和许可见 `NOTICE`、`LICENSE`；`tests/upstream/` 仅用于测试，不参与产品编译。
+`.clang-format` 使用 4 空格、控制块花括号、`ColumnLimit: 0`，枚举成员各占一行。库内函数（含静态函数）统一使用 `znvs_` 前缀，宏和枚举常量使用 `ZNVS_` 前缀。来源和许可见 `NOTICE`、`LICENSE`；`tests/upstream/` 仅用于测试，不参与产品编译。

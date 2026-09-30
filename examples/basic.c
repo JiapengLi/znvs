@@ -10,38 +10,38 @@
 #define WRITE_BYTES 4U
 static unsigned char flash[FLASH_BYTES];
 
-static int read_flash(void *arg, uint32_t off, void *buf, size_t len)
+static int read_flash(void *arg, uint32_t addr, void *buf, size_t len)
 {
-    if (off > FLASH_BYTES || len > FLASH_BYTES - off) {
+    if (addr > FLASH_BYTES || len > FLASH_BYTES - addr) {
         return ZNVS_EIO;
     }
-    memcpy(buf, (unsigned char *)arg + off, len);
+    memcpy(buf, (unsigned char *)arg + addr, len);
     return ZNVS_OK;
 }
-static int write_flash(void *arg, uint32_t off, const void *buf, size_t len)
+static int write_flash(void *arg, uint32_t addr, const void *buf, size_t len)
 {
     unsigned char *dst = arg;
     const unsigned char *src = buf;
     size_t i;
-    if (off > FLASH_BYTES || len > FLASH_BYTES - off || off % WRITE_BYTES || len % WRITE_BYTES) {
+    if (addr > FLASH_BYTES || len > FLASH_BYTES - addr || addr % WRITE_BYTES || len % WRITE_BYTES) {
         return ZNVS_EIO;
     }
     for (i = 0; i < len; ++i) {
-        if ((dst[off + i] & src[i]) != src[i]) {
+        if ((dst[addr + i] & src[i]) != src[i]) {
             return ZNVS_EIO;
         }
     }
     for (i = 0; i < len; ++i) {
-        dst[off + i] &= src[i];
+        dst[addr + i] &= src[i];
     }
     return ZNVS_OK;
 }
-static int erase_flash(void *arg, uint32_t off, size_t len)
+static int erase_flash(void *arg, uint32_t addr, size_t len)
 {
-    if (off > FLASH_BYTES || len > FLASH_BYTES - off || off % ERASE_BYTES || len % ERASE_BYTES) {
+    if (addr > FLASH_BYTES || len > FLASH_BYTES - addr || addr % ERASE_BYTES || len % ERASE_BYTES) {
         return ZNVS_EIO;
     }
-    memset((unsigned char *)arg + off, 0xff, len);
+    memset((unsigned char *)arg + addr, 0xff, len);
     return ZNVS_OK;
 }
 int main(void)

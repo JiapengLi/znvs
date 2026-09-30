@@ -28,17 +28,17 @@ enum {
 
 typedef struct znvs znvs_t;
 
-/* Partition-relative byte offsets. Complete the WHOLE operation synchronously.
+/* Byte addresses relative to the partition base. Complete the WHOLE operation synchronously.
  * Return ZNVS_OK only after completion; any nonzero result becomes ZNVS_EIO.
- * read: arbitrary offset/length. write: aligned offset/length, but the source
- * pointer can be unaligned. erase: erase_size-aligned offset/length.
+ * read: arbitrary address/length. write: aligned address/length, but the source
+ * pointer can be unaligned. erase: erase_size-aligned address/length.
  * NOR semantics: erased bytes 0xff; programming only changes 1 to 0.
  * Port must handle program-page splitting, busy polling, cache/DMA coherency,
  * source-pointer alignment requirements and bounds of the physical partition.
  */
-typedef int (*znvs_read_fn)(void *arg, uint32_t off, void *buf, size_t len);
-typedef int (*znvs_write_fn)(void *arg, uint32_t off, const void *buf, size_t len);
-typedef int (*znvs_erase_fn)(void *arg, uint32_t off, size_t len);
+typedef int (*znvs_read_fn)(void *arg, uint32_t addr, void *buf, size_t len);
+typedef int (*znvs_write_fn)(void *arg, uint32_t addr, const void *buf, size_t len);
+typedef int (*znvs_erase_fn)(void *arg, uint32_t addr, size_t len);
 
 typedef struct {
     znvs_read_fn read;
@@ -50,7 +50,7 @@ typedef struct {
 } znvs_cfg_t;
 
 /* Caller-owned, no heap. Fields are private state despite being exposed for
- * static allocation. cfg must remain alive AND immutable (prefer static const).
+ * static allocation. Initialization copies the configuration into the instance.
  * All operations on an instance, including reads, require external serialization.
  * Callbacks must not re-enter it. Not an ISR API. Separate partitions may use
  * separate instances; serialize shared flash hardware in the port as needed.
@@ -62,16 +62,16 @@ struct znvs_pos {
 };
 
 struct znvs {
-    const znvs_cfg_t *cfg;
+    znvs_cfg_t cfg;
     void *arg;
-    struct znvs_pos pos;
-    uint32_t bank;
-    uint32_t sequence;
-    uint32_t bank_size;
     uint8_t ready;
     uint8_t write_size;
     uint8_t slot_size;
     uint8_t crc_size;
+    struct znvs_pos pos;
+    uint32_t bank;
+    uint32_t sequence;
+    uint32_t bank_size;
 };
 
 /* Build profiles: full (default), boot, readonly. They share this header,
@@ -80,6 +80,7 @@ struct znvs {
  * Other APIs below are provided by full only.
  *
  * Configure and mount. No need to pre-zero *fs. Does NOT erase on a mount error.
+ * cfg is copied; the caller may release it after init. arg remains caller-owned.
  * Recovery selects a fully published bank. Only blank media or an interrupted
  * first header on otherwise blank media is initialized automatically.
  * Read-only and bootloader builds require an initialized partition.
@@ -100,6 +101,7 @@ int znvs_format(znvs_t *fs);
  * A nonzero I/O callback result invalidates the instance: restore the device,
  * then mount again before ANY normal operation. A failed operation may have
  * committed; after mount it may expose the old or new value, never assume rollback.
+ * A partial trailing record seals the bank; the next mutating write collects it.
  */
 int znvs_write(znvs_t *fs, uint16_t id, const void *data, size_t len);
 int znvs_delete(znvs_t *fs, uint16_t id);
@@ -119,7 +121,7 @@ int znvs_read(znvs_t *fs, uint16_t id, void *data, size_t capacity, size_t *leng
 int znvs_read_hist(znvs_t *fs, uint16_t id, uint16_t history, void *data, size_t capacity, size_t *length);
 
 /* O(1): configured maximum payload, and current-bank payload that fits without
- * rotation/GC. Return 0 if unconfigured (max_size) or unmounted (available).
+ * rotation/GC. Return 0 if unconfigured (max_size), unmounted or sealed (available).
  * available is NOT total free space; a larger write can succeed after automatic GC.
  */
 size_t znvs_max_size(const znvs_t *fs);

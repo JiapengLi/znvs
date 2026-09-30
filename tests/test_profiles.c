@@ -25,6 +25,30 @@ static void compare_profiles(znvs_t *app, znvs_t *boot, znvs_t *ro)
     }
 }
 
+static void test_profile_config_copy(void)
+{
+    znvs_cfg_t cfg = config(1024, 2, 4), temporary;
+    znvs_t app, boot, ro;
+    uint8_t value[8];
+    size_t len;
+    test_name = "profiles/config-owned-copy";
+    fresh(&flash, &cfg);
+    CHECK(znvs_init(&app, &cfg, &flash) == 0);
+    temporary = cfg;
+    CHECK(boot_init(&boot, &temporary, &flash) == 0);
+    memset(&temporary, 0, sizeof(temporary));
+    CHECK(boot_write(&boot, 7, "KEEP", 5) == 0);
+    CHECK(boot_mount(&boot) == 0);
+    CHECK(boot_read(&boot, 7, value, sizeof(value), &len) == 0 && len == 5 && memcmp(value, "KEEP", 5) == 0);
+    temporary = cfg;
+    temporary.write = NULL;
+    temporary.erase = NULL;
+    CHECK(ro_init(&ro, &temporary, &flash) == 0);
+    memset(&temporary, 0, sizeof(temporary));
+    CHECK(ro_read(&ro, 7, value, sizeof(value), &len) == 0 && len == 5 && memcmp(value, "KEEP", 5) == 0);
+    guards(&flash);
+}
+
 int main(void)
 {
     znvs_cfg_t cfg = config(4096, 2, 4), read_cfg = cfg, bad;
@@ -35,6 +59,7 @@ int main(void)
     uint8_t value[80];
     uint64_t writes, erases;
     value_t model[KEYS] = {{0, {0}}}, after;
+    test_profile_config_copy();
     test_name = "profiles/full-boot-readonly/interoperability";
     read_cfg.write = NULL;
     read_cfg.erase = NULL;

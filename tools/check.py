@@ -30,6 +30,13 @@ def check_profiles(cc, out, sanitize=False):
     return run([str(exe)], out / "profiles.log")
 
 
+def check_wear(cc, out):
+    exe = out / ("wear.exe" if os.name == "nt" else "wear")
+    flags = ["-std=c11", "-O2", "-Iznvs", "-Itests/upstream/include", "-DCONFIG_NVS_DATA_CRC=1"]
+    run(cc + flags + ["znvs/znvs.c", "tests/upstream/nvs.c", "tests/bench_wear.c", "-o", str(exe)], out / "wear-build.log")
+    return run([str(exe)], out / "wear.log")
+
+
 def run(cmd, log, timeout=240):
     result = subprocess.run(cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, timeout=timeout)
@@ -87,6 +94,9 @@ def main():
         text = run([str(exe)], out / (name + ".log"))
         print(text, flush=True)
         results.append({"name": name, "kind": "reference", "output": text})
+        text = check_wear(cc, out)
+        results.append({"name": "wear", "kind": "erase-write-counts", "output": text})
+        print("Wear comparison: " + str(out / "wear.log"))
     if not args.reference_only:
         text = check_profiles(cc, out, args.sanitize_only)
         print(text, flush=True)
