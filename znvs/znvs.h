@@ -1,5 +1,5 @@
 /*
- * Standalone interface for Zephyr NVS.
+ * ZNVS v2 NOR journal. Incompatible with v1/Zephyr NVS media.
  * SPDX-License-Identifier: Apache-2.0
  */
 #ifndef ZNVS_H
@@ -12,36 +12,15 @@
 extern "C" {
 #endif
 
-/* Define consistently for the library AND every application translation unit. */
-#ifndef ZNVS_IO_SIZE
-#define ZNVS_IO_SIZE 32
-#endif
-#ifndef ZNVS_CACHE_SIZE
-#define ZNVS_CACHE_SIZE 0
-#endif
-#ifndef ZNVS_DATA_CRC
-#define ZNVS_DATA_CRC 1
-#endif
-
-#if ZNVS_IO_SIZE < 8 || (ZNVS_IO_SIZE & (ZNVS_IO_SIZE - 1)) || ZNVS_IO_SIZE > 256
-#error "ZNVS_IO_SIZE must be a power of two in [8, 256]"
-#endif
-#if ZNVS_CACHE_SIZE < 0 || (ZNVS_CACHE_SIZE & (ZNVS_CACHE_SIZE - 1)) || ZNVS_CACHE_SIZE > 32768
-#error "ZNVS_CACHE_SIZE must be zero or a power of two, at most 32768"
-#endif
-#if ZNVS_DATA_CRC != 0 && ZNVS_DATA_CRC != 1
-#error "ZNVS_DATA_CRC must be 0 or 1"
-#endif
-
 /* Values -2/-3/-4 follow zat's EINVAL/ENOSPC/EIO convention; no errno dependency. */
 enum {
-    ZNVS_OK       = 0,
-    ZNVS_ERROR    = -1,
-    ZNVS_EINVAL   = -2,
-    ZNVS_ENOSPC   = -3,
-    ZNVS_EIO      = -4,
-    ZNVS_ENOENT   = -5,
-    ZNVS_ESTATE   = -6,
+    ZNVS_OK = 0,
+    ZNVS_ERROR = -1,
+    ZNVS_EINVAL = -2,
+    ZNVS_ENOSPC = -3,
+    ZNVS_EIO = -4,
+    ZNVS_ENOENT = -5,
+    ZNVS_ESTATE = -6,
     ZNVS_ECORRUPT = -7
 };
 
@@ -63,12 +42,11 @@ typedef int (*znvs_erase_fn)(void *arg, uint32_t off, size_t len);
 
 typedef struct {
     znvs_read_fn read;
-    znvs_write_fn write;
+    znvs_write_fn write; /* NULL allowed in the readonly build. */
     znvs_erase_fn erase;
-    uint32_t size;          /* Partition bytes; whole sectors, 2..65535 sectors. */
-    uint32_t sector_size;   /* Power of two, <=65536; multiple of erase_size. */
-    uint32_t erase_size;    /* Uniform physical erase unit, power of two. */
-    uint16_t write_size;    /* Power of two, <=ZNVS_IO_SIZE. */
+    uint32_t size;       /* Two equal banks, each containing whole erase units. */
+    uint32_t erase_size; /* Uniform physical erase unit, power of two. */
+    uint16_t write_size; /* Power of two, 1..32 bytes. */
 } znvs_cfg_t;
 
 /* Caller-owned, no heap. Fields are private state despite being exposed for
@@ -77,22 +55,34 @@ typedef struct {
  * Callbacks must not re-enter it. Not an ISR API. Separate partitions may use
  * separate instances; serialize shared flash hardware in the port as needed.
  */
+struct znvs_pos {
+    uint32_t data;
+    uint32_t ate;
+};
+
 struct znvs {
     const znvs_cfg_t *cfg;
     void *arg;
-    uint32_t ate_wra;
-    uint32_t data_wra;
-    uint16_t sector_count;
+    struct znvs_pos pos;
+    uint32_t bank;
+    uint32_t sequence;
+    uint32_t bank_size;
     uint8_t ready;
-#if ZNVS_CACHE_SIZE > 0
-    uint32_t lookup_cache[ZNVS_CACHE_SIZE];
-#endif
+    uint8_t write_size;
+    uint8_t slot_size;
+    uint8_t crc_size;
 };
 
-/* Configure and mount. No need to pre-zero *fs. Does NOT erase on a mount error.
- * Mount/recovery can write metadata and erase sectors belonging to an interrupted
- * GC. Use only on a dedicated, correctly configured NVS partition.
- * On a mount error with valid cfg, znvs_format() remains available explicitly.
+/* Build profiles: full (default), boot, readonly. They share this header,
+ * instance layout and CRC32-protected media. No application-side defines.
+ * boot: init/mount/read/write/delete/max_size. readonly: init/mount/read/max_size.
+ * Other APIs below are provided by full only.
+ *
+ * Configure and mount. No need to pre-zero *fs. Does NOT erase on a mount error.
+ * Recovery selects a fully published bank. Only blank media or an interrupted
+ * first header on otherwise blank media is initialized automatically.
+ * Read-only and bootloader builds require an existing v2 partition.
+ * Format is available only in the full read/write build.
  */
 int znvs_init(znvs_t *fs, const znvs_cfg_t *cfg, void *arg);
 int znvs_mount(znvs_t *fs);
@@ -103,7 +93,9 @@ int znvs_mount(znvs_t *fs);
 int znvs_format(znvs_t *fs);
 
 /* IDs 0..65534; 65535 is reserved. len==0 deletes (no distinct empty blob).
- * Returns OK both for a new commit and for an identical-value no-op.
+ * Returns OK both for a new commit and for an identical-value no-op. The bootloader
+ * build omits identical-value detection and always appends nonempty writes.
+ * ENOSPC performs no write or erase. GC validates the CRC of copied live data.
  * A nonzero I/O callback result invalidates the instance: restore the device,
  * then mount again before ANY normal operation. A failed operation may have
  * committed; after mount it may expose the old or new value, never assume rollback.
@@ -114,6 +106,7 @@ int znvs_delete(znvs_t *fs, uint16_t id);
 /* Full-value reads, not silent truncation. length is optional for normal reads.
  * Query size: data=NULL, capacity=0, length!=NULL -> OK + size, NO data CRC check.
  * Undersized buffer: ENOSPC + required length, buffer unchanged.
+ * Invalid committed metadata returns ECORRUPT, never an older value.
  * On read/CRC error buffer contents are unspecified; consume only on OK.
  * Output length is 0 when not found, or the found length once known.
  */
@@ -122,10 +115,9 @@ int znvs_read(znvs_t *fs, uint16_t id, void *data, size_t capacity, size_t *leng
 /* history=0 is latest, 1 is previous, etc. Deletion records count as a version
  * and return ENOENT. GC may discard history: this is NOT an audit log.
  */
-int znvs_read_hist(znvs_t *fs, uint16_t id, uint16_t history,
-                   void *data, size_t capacity, size_t *length);
+int znvs_read_hist(znvs_t *fs, uint16_t id, uint16_t history, void *data, size_t capacity, size_t *length);
 
-/* O(1): configured maximum payload, and current-sector payload that fits without
+/* O(1): configured maximum payload, and current-bank payload that fits without
  * rotation/GC. Return 0 if unconfigured (max_size) or unmounted (available).
  * available is NOT total free space; a larger write can succeed after automatic GC.
  */

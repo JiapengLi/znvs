@@ -2,26 +2,33 @@ CC ?= cc
 AR ?= ar
 PYTHON ?= python3
 BUILD ?= _build
-CRC ?= 1
-CACHE ?= 0
-IO ?= 32
-# Distinct object paths prevent stale ABI/config reuse when changing options.
-OUT := $(BUILD)/crc$(CRC)-cache$(CACHE)-io$(IO)
-CPPFLAGS += -Iznvs -DZNVS_DATA_CRC=$(CRC) -DZNVS_CACHE_SIZE=$(CACHE) -DZNVS_IO_SIZE=$(IO)
+PROFILE ?= full
+PROFILES := full boot readonly
+PROFILE_full := 0
+PROFILE_boot := 1
+PROFILE_readonly := 2
+ifeq ($(filter $(PROFILE),$(PROFILES)),)
+$(error PROFILE must be full, boot or readonly)
+endif
+OUT := $(BUILD)/$(PROFILE)
+CPPFLAGS += -Iznvs
 CFLAGS ?= -Os
 WARN := -std=c99 -Wall -Wextra -Werror -Wpedantic
 
 .PHONY: all test demo matrix reference sanitize measure clean
-all: $(OUT)/libznvs.a $(OUT)/demo
+all: $(OUT)/libznvs.a
+ifeq ($(PROFILE),full)
+all: $(OUT)/demo
+endif
 $(OUT):
 	mkdir -p "$@"
 $(OUT)/znvs.o: znvs/znvs.c znvs/znvs.h | $(OUT)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c $< -o $@
+	$(CC) $(CPPFLAGS) -DZNVS_PROFILE=$(PROFILE_$(PROFILE)) $(CFLAGS) $(WARN) -c $< -o $@
 $(OUT)/libznvs.a: $(OUT)/znvs.o
 	$(AR) rcs $@ $^
 $(OUT)/demo: examples/basic.c $(OUT)/libznvs.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) $< $(OUT)/libznvs.a $(LDFLAGS) $(LDLIBS) -o $@
-$(OUT)/test: tests/test_znvs.c $(OUT)/libznvs.a
+$(OUT)/test: tests/test_znvs.c tests/test_v2_cases.h $(OUT)/libznvs.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) $< $(OUT)/libznvs.a $(LDFLAGS) $(LDLIBS) -o $@
 test: $(OUT)/test
 	$(OUT)/test > $(OUT)/test.log
@@ -37,4 +44,4 @@ sanitize:
 measure:
 	$(PYTHON) tools/measure.py --out "$(BUILD)/measure"
 clean:
-	rm -rf "$(BUILD)"
+	rm -rf "$(OUT)"

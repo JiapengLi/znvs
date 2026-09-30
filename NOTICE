@@ -1,7 +1,7 @@
-ZNVS - standalone extraction of Zephyr NVS
+ZNVS v2 - compact two-bank NOR journal
 Prepared 2026-09-30. Apache License, Version 2.0; see LICENSE.
 
-Production implementation derived from Zephyr v4.4.2:
+The original ZNVS v1 implementation was derived from Zephyr v4.4.2:
 https://github.com/zephyrproject-rtos/zephyr/tree/v4.4.2/subsys/kvss/nvs
   subsys/kvss/nvs/nvs.c
   Git blob SHA-1: fd6dd480d5712c08f5275830fb21e5b05f25df38
@@ -25,7 +25,7 @@ https://github.com/JiapengLi/zat
   Inspiration: explicit instance; caller-owned memory; callback + void *arg;
   prefixed API; status return convention, including EINVAL/ENOSPC/EIO values.
 
-Standalone modifications:
+Historical v1 standalone modifications:
 - Combined private implementation into one .c file and added one public .h.
 - Removed Zephyr kernel, mutex, device, flash, logging, Kconfig and errno dependencies.
 - Added partition-relative synchronous callbacks with normalized error results.
@@ -39,6 +39,18 @@ Standalone modifications:
 - Linear backward orphan-data scan in startup; safe O(1) current-sector availability query.
 - Explicit destructive format only; no automatic full-format on mount failure.
 - All instance operations require application-level serialization.
+
+v2 redesign (2026-09-30):
+- Replaced the sector ring/packed streaming GC with two-bank snapshot publication.
+- Changed the on-flash format: complemented metadata, an independent record commit
+  block, duplicate complemented bank headers, and ID/length-bound payload CRC32.
+- Preserve reservations after interrupted programming; reject invalid committed
+  metadata rather than falling back to old records or resurrecting deletions.
+- Check live-data capacity before erase and verify payload CRC during GC copying.
+- Optional temporary GC filter, fixed-geometry bootloader and read-only builds.
+- Full/boot/read-only media interoperability and broader unordered NOR fault tests.
+- The v1 byte-image compatibility claim no longer applies. Upstream remains a
+  logical-value reference and a source of legacy images that v2 must reject.
 
 Tests/upstream contains the two original source files listed above UNMODIFIED.
 Its include/ref_shim.h is a TEST-ONLY host adapter for independent execution of

@@ -1,11 +1,17 @@
-/* Byte-image comparison and bidirectional mount/read against upstream NVS.
+/* Logical-value comparison with upstream; v2 must reject v1 media unchanged.
  * SPDX-License-Identifier: Apache-2.0 */
 #include "znvs.h"
 #include "ref_shim.h"
 #include <stdio.h>
 #include <stdlib.h>
 #define FLASH_SIZE 4096U
-#define REQUIRE(x) do { if (!(x)) { fprintf(stderr, "reference FAIL line %d: %s\n", __LINE__, #x); exit(1); } } while(0)
+#define REQUIRE(x)                                                         \
+    do {                                                                   \
+        if (!(x)) {                                                        \
+            fprintf(stderr, "reference FAIL line %d: %s\n", __LINE__, #x); \
+            exit(1);                                                       \
+        }                                                                  \
+    } while (0)
 static uint8_t ours[FLASH_SIZE], upstream[FLASH_SIZE], cross1[FLASH_SIZE], cross2[FLASH_SIZE];
 static uint16_t wbs;
 static int rd(void *a, uint32_t off, void *p, size_t n)
@@ -50,21 +56,26 @@ static void compare_reads(znvs_t *a, struct nvs_fs *b)
 }
 static uint32_t next(uint32_t *s)
 {
-    *s ^= *s << 13; *s ^= *s >> 17; *s ^= *s << 5;
+    *s ^= *s << 13;
+    *s ^= *s >> 17;
+    *s ^= *s << 5;
     return *s;
 }
 int main(void)
 {
     unsigned comparisons = 0, cross_mounts = 0;
-    for (wbs = 1; wbs <= 32 && wbs <= ZNVS_IO_SIZE; wbs *= 2) {
-        const znvs_cfg_t cfg = {rd, wr, er, FLASH_SIZE, 1024, 512, wbs};
+    for (wbs = 1; wbs <= 32; wbs *= 2) {
+        const znvs_cfg_t cfg = {rd, wr, er, FLASH_SIZE, 512, wbs};
         struct device dev = {upstream, rd, wr, er, {wbs, 0xff}, 512};
         struct nvs_fs ref = {0};
         znvs_t fs;
         uint32_t seed = 0x895241baU;
         unsigned step;
-        memset(ours, 0xff, sizeof(ours)); memset(upstream, 0xff, sizeof(upstream));
-        ref.flash_device = &dev; ref.sector_size = 1024; ref.sector_count = 4;
+        memset(ours, 0xff, sizeof(ours));
+        memset(upstream, 0xff, sizeof(upstream));
+        ref.flash_device = &dev;
+        ref.sector_size = 1024;
+        ref.sector_count = 4;
         REQUIRE(nvs_mount(&ref) == 0 && znvs_init(&fs, &cfg, ours) == 0);
         for (step = 0; step < 1200; ++step) {
             uint8_t value[64];
@@ -72,31 +83,26 @@ int main(void)
             size_t len = next(&seed) % 64, i;
             int a;
             ssize_t b;
-            for (i = 0; i < len; ++i) value[i] = (uint8_t)next(&seed);
+            for (i = 0; i < len; ++i) {
+                value[i] = (uint8_t)next(&seed);
+            }
             a = znvs_write(&fs, id, value, len);
             b = nvs_write(&ref, id, value, len);
             REQUIRE((a == 0 && b >= 0) || (a == ZNVS_ENOSPC && b == -ENOSPC));
-            REQUIRE(memcmp(ours, upstream, sizeof(ours)) == 0);
+            compare_reads(&fs, &ref);
             ++comparisons;
             if (step % 37 == 0) {
-                struct nvs_fs cross_ref = {0};
-                struct device cross_dev = dev;
                 znvs_t cross_fs;
                 memcpy(cross1, ours, sizeof(ours));
                 memcpy(cross2, upstream, sizeof(upstream));
-                cross_dev.arg = cross1;
-                cross_ref.flash_device = &cross_dev;
-                cross_ref.sector_size = 1024; cross_ref.sector_count = 4;
-                REQUIRE(nvs_mount(&cross_ref) == 0);
-                REQUIRE(znvs_init(&cross_fs, &cfg, cross2) == 0);
-                compare_reads(&fs, &cross_ref);
+                REQUIRE(znvs_init(&cross_fs, &cfg, cross1) == 0);
                 compare_reads(&cross_fs, &ref);
+                REQUIRE(znvs_init(&cross_fs, &cfg, cross2) == ZNVS_ECORRUPT);
+                REQUIRE(memcmp(cross2, upstream, sizeof(upstream)) == 0);
                 cross_mounts += 2;
             }
         }
     }
-    printf("PASS upstream v4.4.2 host-adapted CRC=%d CACHE=%d IO=%d: "
-           "%u byte-identical images, %u cross-mounts\n",
-           ZNVS_DATA_CRC, ZNVS_CACHE_SIZE, ZNVS_IO_SIZE, comparisons, cross_mounts);
+    printf("PASS upstream v4.4.2 host-adapted CRC32: %u logical-value comparisons, %u v2-remount/v1-rejection checks\n", comparisons, cross_mounts);
     return 0;
 }

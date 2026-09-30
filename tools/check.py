@@ -12,8 +12,22 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-PROFILES = [(1, 0, 32), (0, 0, 32), (1, 1, 32), (1, 8, 32),
-            (0, 8, 8), (1, 0, 8), (1, 8, 64), (1, 8, 256)]
+
+
+def check_profiles(cc, out, sanitize=False):
+    flags = ["-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", "-Wpedantic", "-Iznvs"]
+    if sanitize:
+        flags += ["-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+    objects = []
+    for prefix, extra in [("boot", ["-DZNVS_PROFILE=1"]), ("ro", ["-DZNVS_PROFILE=2"])]:
+        obj = out / (prefix + ".o")
+        names = ["init", "mount", "read", "write", "delete", "max_size", "read_hist", "available", "arg"]
+        rename = ["-Dznvs_%s=%s_%s" % (name, prefix, name) for name in names]
+        run(cc + flags + extra + rename + ["-c", "znvs/znvs.c", "-o", str(obj)], out / (prefix + "-build.log"))
+        objects.append(str(obj))
+    exe = out / ("profiles.exe" if os.name == "nt" else "profiles")
+    run(cc + flags + ["znvs/znvs.c", "tests/test_profiles.c"] + objects + ["-o", str(exe)], out / "profiles-build.log")
+    return run([str(exe)], out / "profiles.log")
 
 
 def run(cmd, log, timeout=240):
@@ -51,35 +65,38 @@ def main():
     compiler = run(cc + ["--version"], out / "compiler.log").splitlines()[0]
     results = []
     if not args.reference_only:
-        profiles = [(1, 0, 32), (1, 8, 32)] if args.sanitize_only else PROFILES
-        for crc, cache, io in profiles:
-            name = "crc%d-cache%d-io%d" % (crc, cache, io)
-            exe = out / (name + (".exe" if os.name == "nt" else ""))
-            flags = ["-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", "-Wpedantic"]
-            if args.sanitize_only:
-                flags += ["-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
-            cmd = cc + flags + ["-Iznvs", "-DZNVS_DATA_CRC=%d" % crc,
-                               "-DZNVS_CACHE_SIZE=%d" % cache, "-DZNVS_IO_SIZE=%d" % io,
-                               "znvs/znvs.c", "tests/test_znvs.c", "-o", str(exe)]
-            run(cmd, out / (name + "-build.log"))
-            text = run([str(exe)], out / (name + ".log"))
-            print(text, flush=True)
-            results.append({"name": name, "kind": "sanitizer" if args.sanitize_only else "nor",
-                            "output": text})
+        name = "full"
+        exe = out / (name + (".exe" if os.name == "nt" else ""))
+        flags = ["-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", "-Wpedantic"]
+        if args.sanitize_only:
+            flags += ["-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+        cmd = cc + flags + ["-Iznvs", "znvs/znvs.c", "tests/test_znvs.c", "-o", str(exe)]
+        run(cmd, out / (name + "-build.log"))
+        text = run([str(exe)], out / (name + ".log"))
+        print(text, flush=True)
+        results.append({"name": name, "kind": "sanitizer" if args.sanitize_only else "nor",
+                        "output": text})
     if not args.sanitize_only:
         verify_upstream()
-        for crc, cache in [(0, 0), (1, 0), (1, 8)]:
-            name = "reference-crc%d-cache%d" % (crc, cache)
-            exe = out / (name + (".exe" if os.name == "nt" else ""))
-            cmd = cc + ["-std=c11", "-O2", "-Iznvs", "-Itests/upstream/include",
-                        "-DZNVS_DATA_CRC=%d" % crc, "-DZNVS_CACHE_SIZE=%d" % cache]
-            if crc:
-                cmd += ["-DCONFIG_NVS_DATA_CRC=1"]
-            cmd += ["znvs/znvs.c", "tests/upstream/nvs.c", "tests/test_upstream.c", "-o", str(exe)]
-            run(cmd, out / (name + "-build.log"))
-            text = run([str(exe)], out / (name + ".log"))
-            print(text, flush=True)
-            results.append({"name": name, "kind": "reference", "output": text})
+        name = "reference"
+        exe = out / (name + (".exe" if os.name == "nt" else ""))
+        cmd = cc + ["-std=c11", "-O2", "-Iznvs", "-Itests/upstream/include"]
+        cmd += ["-DCONFIG_NVS_DATA_CRC=1"]
+        cmd += ["znvs/znvs.c", "tests/upstream/nvs.c", "tests/test_upstream.c", "-o", str(exe)]
+        run(cmd, out / (name + "-build.log"))
+        text = run([str(exe)], out / (name + ".log"))
+        print(text, flush=True)
+        results.append({"name": name, "kind": "reference", "output": text})
+    if not args.reference_only:
+        text = check_profiles(cc, out, args.sanitize_only)
+        print(text, flush=True)
+        results.append({"name": "profiles", "kind": "interoperability", "output": text})
+    if not args.reference_only and not args.sanitize_only:
+        exe = out / ("benchmark.exe" if os.name == "nt" else "benchmark")
+        run(cc + ["-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", "-Wpedantic", "-Iznvs", "znvs/znvs.c", "tests/bench_znvs.c", "-o", str(exe)], out / "benchmark-build.log")
+        text = run([str(exe)], out / "benchmark.log")
+        results.append({"name": "benchmark", "kind": "callback-counts", "output": text})
+        print("Callback counts: " + str(out / "benchmark.log"))
     report = {"compiler": compiler, "results": results}
     (out / "results.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print("All requested tests passed. Logs: " + str(out))
