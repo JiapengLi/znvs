@@ -290,6 +290,52 @@ static void test_filter_collisions(void)
     }
 }
 
+static void test_cache_collisions(void)
+{
+    znvs_cfg_t c = config(1024, 2, 4);
+    znvs_t fs;
+    value_t model[KEYS] = {{0, {0}}};
+    uint32_t seed = UINT32_C(0x5179ab34);
+    unsigned kind, step, k, id;
+    test_name = "recovery/GC-cache-eviction/newer-value-and-deletion-win";
+    for (kind = 0; kind < 2; ++kind) {
+        fresh(&flash, &c);
+        CHECK(znvs_init(&fs, &c, &flash) == 0);
+        CHECK(znvs_write(&fs, 0, "OLD", 4) == 0);
+        CHECK(znvs_write(&fs, 514, "C", 2) == 0);
+        CHECK(znvs_write(&fs, 257, "B", 2) == 0);
+        CHECK(znvs_write(&fs, 0, "NEW", kind ? 0 : 4) == 0);
+        /* Newest-first order is A, B, C, old A. All three IDs map to one
+         * tag slot, so the old A is revisited after A's tag was evicted. */
+        CHECK(znvs_rotate(&fs) == 0);
+        CHECK(znvs_mount(&fs) == 0);
+        expect(&fs, 0, kind ? NULL : "NEW", kind ? 0 : 4);
+        expect(&fs, 257, "B", 2);
+        expect(&fs, 514, "C", 2);
+        CHECK(znvs_read_hist(&fs, 0, 1, bigread, sizeof(bigread), NULL) == ZNVS_ENOENT);
+        guards(&flash);
+    }
+    test_name = "recovery/GC-cache-collisions/random-updates-and-deletions";
+    fresh(&flash, &c);
+    CHECK(znvs_init(&fs, &c, &flash) == 0);
+    for (step = 0; step < 1200; ++step) {
+        id = rng(&seed) % KEYS;
+        model[id].len = rng(&seed) % 24;
+        for (k = 0; k < model[id].len; ++k) {
+            model[id].data[k] = (uint8_t)rng(&seed);
+        }
+        CHECK(znvs_write(&fs, (uint16_t)(id * 257), model[id].data, model[id].len) == 0);
+        if (step % 29 == 0 || step == 1199) {
+            CHECK(znvs_rotate(&fs) == 0);
+            CHECK(znvs_mount(&fs) == 0);
+            for (k = 0; k < KEYS; ++k) {
+                expect(&fs, (uint16_t)(k * 257), model[k].data, model[k].len);
+            }
+        }
+    }
+    guards(&flash);
+}
+
 static void test_recovery(void)
 {
     test_partial_metadata_alias();
@@ -298,4 +344,5 @@ static void test_recovery(void)
     test_unordered_failures();
     test_first_header();
     test_filter_collisions();
+    test_cache_collisions();
 }

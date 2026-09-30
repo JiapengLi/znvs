@@ -8,22 +8,23 @@ Fixed CRC32, runtime geometry, owned config copy, no heap or persistent lookup c
 Uncommitted nonempty tails seal the bank; the next mutating write collects it.
 
 SOURCE SHA-256
-  znvs/znvs.c: 7fd54c23af9caf280a9edbe469bd5e589a21447e5b7dfc4a08d5b2fc24ded056
+  znvs/znvs.c: afcc7f360e28d45312f22db05b473a181676c541be7d1fcfc1f1aab17574bc8b
   znvs/znvs.h: 7970f9d7523a97df2fd980b455b5f2781062c6d5e0b5531890d9a430f70ae71b
 
 HOST TESTS
 gcc (Rev3, Built by MSYS2 project) 16.2.0
-Command: python tools/check.py --cc gcc --out _build/compact/final-matrix
+Command: python tools/check.py --cc gcc --out _build/iterate/final-matrix
 NOR faults: prefix cuts and arbitrary subsets of bits in failed write/erase operations.
 Write granules: 1, 2, 4, 8, 16, 32 bytes.
 Coverage: metadata/payload corruption, interrupted initialization and GC, sealed tails,
 deletion, full media, mismatched geometry, foreign signatures, sequence wrap,
 temporary/modified caller config and full/boot/readonly interoperability.
+GC tag eviction: fixed newer-value/delete histories and 1200 randomized colliding-ID updates.
 Committed metadata: all 64 single-bit and 2016 two-bit faults per record kind and granule.
 Includes legal partial programming that leaves CRC-valid but false ID/length metadata.
 
 ZNVS test: fixed CRC32, sizeof(znvs_t)=72 cfg=40
-PASS checks=54246494 random_operations=32400 fault_scenarios=131015
+PASS checks=54177256 random_operations=32400 fault_scenarios=131015
 
 PASS upstream v4.4.2 host-adapted CRC32: 7200 logical-value comparisons, 396 remount/foreign-format rejection checks
 
@@ -33,10 +34,10 @@ Fault scenarios: 131015 main + 11168 boot-GC = 142183; sanitizer repeats are not
 
 SANITIZERS
 clang version 22.1.8 (https://github.com/msys2/MINGW-packages 6e4e79c2f86eeb534e324e583f2057dc9fd5ecab)
-Command: python tools/check.py --cc clang --sanitize-only --out _build/compact/final-sanitize
+Command: python tools/check.py --cc clang --sanitize-only --out _build/iterate/final-sanitize
 
 ZNVS test: fixed CRC32, sizeof(znvs_t)=72 cfg=40
-PASS checks=54246494 random_operations=32400 fault_scenarios=131015
+PASS checks=54177256 random_operations=32400 fault_scenarios=131015
 
 PASS profiles: 1800 alternating full/boot writes, read-only checks, 11168 unordered boot-GC failures across 6 write geometries
 
@@ -47,22 +48,22 @@ PASS: C++11 public header, linked and executed with each C profile.
 PASS: Clang Cortex-M3 static analysis for all three profiles, no diagnostics.
 PASS: modified/new C/h clang-format, git diff --check, existing LF retained.
 PASS: 29 private functions use znvs_; all owned library macros/enumerators use ZNVS_.
-Logs: _build/compact/final-build/logs/.
+Logs: _build/iterate/final-build/logs/.
 
 CORTEX-M3 SIZE / MODULE-LOCAL STACK
 clang version 22.1.8 (https://github.com/msys2/MINGW-packages 6e4e79c2f86eeb534e324e583f2057dc9fd5ecab)
-Command: python tools/measure.py --clang clang --size llvm-size --nm llvm-nm --out _build/compact/final-measure
+Command: python tools/measure.py --clang clang --size llvm-size --nm llvm-nm --out _build/iterate/final-measure
 Flags: Cortex-M3 Thumb, -std=c99 -Oz -ffreestanding -fno-builtin; link -flto --gc-sections.
 Linked roots: init/read/write/delete for RW; init/read for RO.
 
-full: ROM=2628 (module=2568 + support=60), object_text=3032, instance=52, cfg=24
-  znvs_write local stack bound=368; static data=0, bss=0
-boot: ROM=2144 (module=2112 + support=32), object_text=2294, instance=52, cfg=24
+full: ROM=2622 (module=2562 + support=60), object_text=3024, instance=52, cfg=24
+  znvs_write local stack bound=352; static data=0, bss=0
+boot: ROM=2136 (module=2104 + support=32), object_text=2282, instance=52, cfg=24
   znvs_write local stack bound=272; static data=0, bss=0
 readonly: ROM=972 (module=972 + support=0), object_text=1056, instance=52, cfg=24
   znvs_read local stack bound=144; static data=0, bss=0
 
-Boot exceeds a strict 2048-byte budget by 96 bytes.
+Boot exceeds a strict 2048-byte budget by 88 bytes.
 ROM includes ARM unwind data and separately compiled size-only C support.
 Flash port, startup, vectors and application buffers are excluded.
 Instance RAM includes the config copy: ARM 52 bytes; host x86-64 72 bytes.
@@ -98,5 +99,16 @@ Counts exclude initialization, seeding and warmup:
   ZNVS still has about 26% higher erase frequency in this workload.
 Source: tests/bench_wear.c; raw callback statistics in final-matrix/wear.log.
 
-Raw logs and metrics: _build/compact/ (ignored build artifacts).
+GC LOOKUP OVERHEAD
+Full uses the same 32-byte temporary space: eight exact ID tags plus a 128-bit filter.
+Tag hits skip older records; evictions/filter collisions use exact lookup.
+No persistent cache or change to flash layout, instance RAM, or erase/program counts.
+Same wear workload, measured read callbacks / bytes:
+  Round-robin-eight: ZNVS 235896 / 2316212; Zephyr 391241 / 3298760.
+  One-hot-seven-cold: ZNVS 95896 / 1056212; Zephyr 317823 / 2711416.
+Before the tag optimization, ZNVS round-robin-eight used 374208 / 3561020.
+This reduces read callbacks by 36.96% for that workload; it is not a hardware speedup claim.
+Fresh 8/32/64-key callback benchmarks above are unchanged; worst-case GC remains quadratic.
+
+Raw logs and metrics: _build/iterate/ (ignored build artifacts).
 Host validation does not include on-device power-cut, ECC or driver timing tests.

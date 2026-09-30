@@ -19,7 +19,8 @@ enum {
     ZNVS_HEADER_COPY_BYTES = 16,
     ZNVS_META_BYTES = 8,
     ZNVS_IO_BYTES = 32,
-    ZNVS_GC_FILTER_BYTES = 32
+    ZNVS_GC_FILTER_BYTES = 16,
+    ZNVS_GC_TAGS = 8
 };
 
 enum {
@@ -31,6 +32,11 @@ enum {
 enum {
     ZNVS_READY = 1,
     ZNVS_SEALED = 2
+};
+
+struct znvs_gc_seen {
+    uint16_t ids[ZNVS_GC_TAGS];
+    uint8_t bits[ZNVS_GC_FILTER_BYTES];
 };
 
 struct znvs_entry {
@@ -136,13 +142,13 @@ static int znvs_read_flash(znvs_t *fs, uint32_t addr, void *data, size_t len)
 /* Read only the active bank. Validate addresses before using decoded entries. */
 static int znvs_load_entry(znvs_t *fs, uint32_t addr, struct znvs_entry *entry)
 {
-    uint8_t raw[(ZNVS_IO_BYTES + 1)];
+    uint8_t raw[ZNVS_IO_BYTES + 1];
     uint32_t size = znvs_meta_size(fs);
     if (znvs_read_flash(fs, addr, raw, size + 1)) {
         return ZNVS_EIO;
     }
     if (raw[size] == 0xff) {
-        return znvs_erased(raw, size + 1) ? ZNVS_EMPTY : ZNVS_TORN;
+        return znvs_erased(raw, size) ? ZNVS_EMPTY : ZNVS_TORN;
     }
     if (znvs_get32(raw + 4) != ~znvs_crc32(UINT32_MAX, raw, 4)) {
         return znvs_fail(fs, ZNVS_ECORRUPT);
@@ -176,19 +182,17 @@ static int znvs_previous_entry(znvs_t *fs, struct znvs_pos *pos, struct znvs_ent
     return 0;
 }
 
-static int znvs_find_entry(znvs_t *fs, uint16_t id, uint16_t history, struct znvs_entry *entry, uint32_t *found)
+static int znvs_find_entry(znvs_t *fs, uint16_t id, uint16_t history, struct znvs_entry *entry)
 {
     struct znvs_pos pos = fs->pos;
     int rc;
     while (pos.ate < fs->bank + fs->bank_size) {
-        uint32_t addr = pos.ate;
         rc = znvs_previous_entry(fs, &pos, entry);
         if (rc) {
             return rc;
         }
         if (entry->id == id) {
             if (!history) {
-                *found = addr;
                 return 0;
             }
             --history;
@@ -212,8 +216,8 @@ static int znvs_bank_header(znvs_t *fs, uint32_t bank, uint32_t *sequence)
     if (znvs_read_flash(fs, bank, raw, sizeof(raw))) {
         return ZNVS_EIO;
     }
-    /* Either copy can publish the snapshot. A single retained bit flip cannot
-     * remove both copies or select an older snapshot. */
+    /* Either copy can publish the snapshot. Once both copies are complete,
+     * a single retained bit flip cannot remove both or select an older bank. */
     for (i = 0; i < ZNVS_HEADER_BYTES; i += ZNVS_HEADER_COPY_BYTES) {
         if (znvs_encoded(raw + i) && znvs_get32(raw + i) == znvs_format_magic(fs)) {
             uint32_t value = znvs_get32(raw + i + 4);
@@ -340,13 +344,11 @@ static int znvs_append(znvs_t *fs, struct znvs_pos *pos, const struct znvs_entry
     return 0;
 }
 
-static int znvs_next_live(znvs_t *fs, struct znvs_pos *cursor, uint16_t exclude, struct znvs_entry *entry, uint8_t *seen)
+static int znvs_next_live(znvs_t *fs, struct znvs_pos *cursor, uint16_t exclude, struct znvs_entry *entry, struct znvs_gc_seen *seen)
 {
     struct znvs_entry latest;
-    uint32_t found;
     int rc;
     while (cursor->ate < fs->bank + fs->bank_size) {
-        uint32_t addr = cursor->ate;
         rc = znvs_previous_entry(fs, cursor, entry);
         if (rc) {
             return rc;
@@ -356,30 +358,37 @@ static int znvs_next_live(znvs_t *fs, struct znvs_pos *cursor, uint16_t exclude,
         }
 #if ZNVS_PROFILE == 0
         {
-            uint32_t slot = (entry->id >> 3) & (ZNVS_GC_FILTER_BYTES - 1);
+            uint32_t slot = (entry->id ^ (entry->id >> 8)) & (ZNVS_GC_TAGS - 1);
             uint8_t mask = (uint8_t)(1U << (entry->id & 7));
-            int first = !(seen[slot] & mask);
-            seen[slot] |= mask;
-            /* A clear bit proves this ID has not appeared in the newest-first
-             * scan. Collisions fall back to an exact lookup, including deletes. */
-            if (first) {
-                if (entry->len) {
-                    return 1;
-                }
+            int first;
+            if (seen->ids[slot] == entry->id) {
                 continue;
+            }
+            seen->ids[slot] = entry->id;
+            slot = (entry->id >> 3) & (ZNVS_GC_FILTER_BYTES - 1);
+            first = seen->bits[slot] & mask;
+            seen->bits[slot] &= (uint8_t)~mask;
+            if (!entry->len) {
+                continue;
+            }
+            /* A set bit proves the ID is new. Tags skip known duplicates;
+             * filter collisions and evicted tags use an exact lookup. */
+            if (first) {
+                return 1;
             }
         }
 #else
         (void)seen;
-#endif
         if (!entry->len) {
             continue;
         }
-        rc = znvs_find_entry(fs, entry->id, 0, &latest, &found);
+#endif
+        rc = znvs_find_entry(fs, entry->id, 0, &latest);
         if (rc) {
             return rc;
         }
-        if (addr == found) {
+        /* Nonempty payload starts uniquely identify records, even after deletes. */
+        if (entry->addr == latest.addr) {
             return 1;
         }
     }
@@ -395,9 +404,10 @@ static int znvs_collect(znvs_t *fs, const struct znvs_entry *pending, const void
     struct znvs_pos cursor;
     uint32_t used = ZNVS_HEADER_BYTES;
 #if ZNVS_PROFILE == 0
-    uint8_t seen[ZNVS_GC_FILTER_BYTES];
+    struct znvs_gc_seen storage;
+    struct znvs_gc_seen *seen = &storage;
 #else
-    uint8_t *seen = NULL;
+    struct znvs_gc_seen *seen = NULL;
 #endif
     int rc;
     unsigned pass;
@@ -410,7 +420,7 @@ static int znvs_collect(znvs_t *fs, const struct znvs_entry *pending, const void
     for (pass = 0; pass < 2; ++pass) {
         cursor = fs->pos;
 #if ZNVS_PROFILE == 0
-        memset(seen, 0, sizeof(seen));
+        memset(seen, 0xff, sizeof(*seen));
 #endif
         while ((rc = znvs_next_live(fs, &cursor, pending->id, &entry, seen)) > 0) {
             if (pass) {
@@ -605,7 +615,6 @@ int znvs_read_hist(znvs_t *fs, uint16_t id, uint16_t history, void *data, size_t
 {
 #endif
     struct znvs_entry entry;
-    uint32_t addr;
     int rc;
     if (length) {
         *length = 0;
@@ -616,7 +625,7 @@ int znvs_read_hist(znvs_t *fs, uint16_t id, uint16_t history, void *data, size_t
     if (id == UINT16_MAX || (!data && (capacity || !length))) {
         return ZNVS_EINVAL;
     }
-    if ((rc = znvs_find_entry(fs, id, history, &entry, &addr)) != 0) {
+    if ((rc = znvs_find_entry(fs, id, history, &entry)) != 0) {
         return rc;
     }
     if (!entry.len) {
@@ -661,7 +670,6 @@ int znvs_write(znvs_t *fs, uint16_t id, const void *data, size_t len)
     uint8_t raw[ZNVS_IO_BYTES];
     uint32_t done = 0;
 #endif
-    uint32_t addr;
     int rc = znvs_ready(fs);
     if (rc) {
         return rc;
@@ -670,7 +678,7 @@ int znvs_write(znvs_t *fs, uint16_t id, const void *data, size_t len)
         return ZNVS_EINVAL;
     }
     if (ZNVS_PROFILE == 0 || !len) {
-        rc = znvs_find_entry(fs, id, 0, &entry, &addr);
+        rc = znvs_find_entry(fs, id, 0, &entry);
         if (rc && rc != ZNVS_ENOENT) {
             return rc;
         }
