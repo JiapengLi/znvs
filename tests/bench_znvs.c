@@ -16,12 +16,14 @@ static void counters_print(const char *operation, unsigned keys)
 int main(void)
 {
     znvs_cfg_t cfg = config(4096, 2, 4);
+    static const unsigned key_counts[] = {8, 32, 64};
     znvs_t fs;
-    unsigned keys, k;
+    unsigned scenario, keys, k;
     uint32_t value = 0x12345678, out;
     int rc;
     printf("BENCH configuration: CRC32, no lookup cache, 32-byte I/O/GC buffers\n");
-    for (keys = 16; keys <= 128; keys *= 2) {
+    for (scenario = 0; scenario < sizeof(key_counts) / sizeof(key_counts[0]); ++scenario) {
+        keys = key_counts[scenario];
         fresh(&flash, &cfg);
         CHECK(znvs_init(&fs, &cfg, &flash) == 0);
         counters_print("blank-init", keys);

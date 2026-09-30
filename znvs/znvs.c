@@ -1,8 +1,8 @@
-/* ZNVS v2: a compact two-bank NOR journal.
+/* ZNVS: a compact two-bank NOR journal.
  * Copyright (c) 2018 Laczen
  * Copyright (c) 2026 Lingao Meng
  * SPDX-License-Identifier: Apache-2.0
- * Replaces the Zephyr-derived v1 implementation; see NOTICE.
+ * Source attribution: see NOTICE.
  */
 #include "znvs.h"
 #include <string.h>
@@ -16,7 +16,8 @@
 #endif
 enum {
     HEADER_BYTES = 32,
-    META_BYTES = 16,
+    HEADER_COPY_BYTES = 16,
+    META_BYTES = 20,
     IO_BYTES = 32,
     GC_FILTER_BYTES = 32
 };
@@ -126,22 +127,24 @@ static int read_flash(znvs_t *fs, uint32_t off, void *data, size_t len)
     return 0;
 }
 
-/* Addresses are validated when decoding metadata and before allocation. */
+/* Read only the active bank. Validate addresses before using decoded entries. */
 static int load_entry(znvs_t *fs, uint32_t addr, struct entry *entry)
 {
     uint8_t raw[(IO_BYTES + 1)];
     uint32_t size = meta_size(fs);
-    uint32_t bank = addr < fs->bank_size ? 0 : fs->bank_size;
+    uint32_t bank = fs->bank;
     int committed;
     if (read_flash(fs, addr, raw, size + 1)) {
         return ZNVS_EIO;
     }
-    if (erased(raw, size + 1)) {
-        return EMPTY;
-    }
     committed = raw[size] != 0xff;
     if (!encoded(raw)) {
-        return committed ? fail(fs, ZNVS_ECORRUPT) : TORN;
+        return committed ? fail(fs, ZNVS_ECORRUPT) : (erased(raw, size + 1) ? EMPTY : TORN);
+    }
+    /* The reservation CRC may itself be torn. Only the independent commit
+     * makes it mandatory, before ID/length/offset can affect any lookup. */
+    if (committed && get32(raw + 16) != ~crc32(UINT32_MAX, raw, 8)) {
+        return fail(fs, ZNVS_ECORRUPT);
     }
     entry->id = (uint16_t)get32(raw);
     entry->len = (uint16_t)(get32(raw) >> 16);
@@ -174,7 +177,9 @@ static int find_entry(znvs_t *fs, uint16_t id, uint16_t history, struct entry *e
 
 static uint32_t format_magic(const znvs_t *fs)
 {
-    return UINT32_C(0x32564e5a) ^ fs->bank_size ^ ((uint32_t)fs->write_size << 16) ^ UINT32_C(0x80000000);
+    /* B is a multiple of W, W is a power of two and B < 2^31. The trailing
+     * ones uniquely encode W; the remaining bits encode B without overlap. */
+    return UINT32_C(0x33564e5a) ^ (fs->bank_size << 1) ^ (fs->write_size - 1U);
 }
 
 static int bank_header(znvs_t *fs, uint32_t bank, uint32_t *sequence)
@@ -187,7 +192,7 @@ static int bank_header(znvs_t *fs, uint32_t bank, uint32_t *sequence)
     }
     /* Either copy can publish the snapshot. A single retained bit flip cannot
      * remove both copies or select an older snapshot. */
-    for (i = 0; i < HEADER_BYTES; i += META_BYTES) {
+    for (i = 0; i < HEADER_BYTES; i += HEADER_COPY_BYTES) {
         if (encoded(raw + i) && get32(raw + i) == format_magic(fs)) {
             uint32_t value = get32(raw + i + 4);
             if (valid && value != *sequence) {
@@ -253,8 +258,9 @@ static int publish_bank(znvs_t *fs, uint32_t bank, uint32_t sequence)
 {
     uint8_t raw[HEADER_BYTES];
     encode(raw, format_magic(fs), sequence);
-    memcpy(raw + META_BYTES, raw, META_BYTES);
-    return program(fs, bank, raw, sizeof(raw));
+    memcpy(raw + HEADER_COPY_BYTES, raw, HEADER_COPY_BYTES);
+    /* Every supported write granule divides HEADER_BYTES. */
+    return write_flash(fs, bank, raw, sizeof(raw));
 }
 
 /* Reserve before writing data. The separate commit block is written last. */
@@ -264,8 +270,11 @@ static int append(znvs_t *fs, struct znvs_pos *pos, const struct entry *entry, c
     uint32_t addr = pos->ate - slot_size(fs);
     uint32_t offset = pos->data;
     uint32_t done = 0;
-    uint32_t crc = entry_crc(entry);
+    uint32_t crc;
     encode(raw, entry->id | (uint32_t)entry->len << 16, offset);
+    /* ID/length is the common prefix of both CRCs. */
+    crc = crc32(UINT32_MAX, raw, 4);
+    put32(raw + 16, ~crc32(crc, raw + 4, 4));
     if (program(fs, addr, raw, META_BYTES)) {
         return ZNVS_EIO;
     }
@@ -301,8 +310,8 @@ static int append(znvs_t *fs, struct znvs_pos *pos, const struct entry *entry, c
             return ZNVS_EIO;
         }
     }
-    memset(raw, 0xff, fs->write_size);
     raw[0] = 0;
+    memset(raw + 1, 0xff, fs->write_size - 1);
     if (write_flash(fs, addr + meta_size(fs), raw, fs->write_size)) {
         return ZNVS_EIO;
     }
@@ -432,7 +441,7 @@ static int valid_config(const znvs_cfg_t *cfg)
     }
     w = cfg->write_size;
     bank = cfg->size / 2;
-    return w && !(w & (w - 1)) && w <= IO_BYTES && cfg->erase_size && !(cfg->erase_size & (cfg->erase_size - 1)) && !(cfg->size & 1) && !(bank & (w - 1)) && !(bank & (cfg->erase_size - 1)) && bank >= HEADER_BYTES + (w > META_BYTES ? w : META_BYTES) + 3 * w + 4;
+    return w && !(w & (w - 1)) && w <= IO_BYTES && cfg->erase_size && !(cfg->erase_size & (cfg->erase_size - 1)) && !(cfg->size & 1) && !(bank & (w - 1)) && !(bank & (cfg->erase_size - 1));
 }
 
 int znvs_init(znvs_t *fs, const znvs_cfg_t *cfg, void *arg)
@@ -445,19 +454,22 @@ int znvs_init(znvs_t *fs, const znvs_cfg_t *cfg, void *arg)
     if (!valid_config(cfg)) {
         return ZNVS_EINVAL;
     }
-    fs->cfg = cfg;
-    fs->arg = arg;
     fs->bank_size = cfg->size / 2;
     fs->write_size = (uint8_t)cfg->write_size;
     fs->slot_size = (uint8_t)(align_size(fs, META_BYTES) + fs->write_size);
     fs->crc_size = (uint8_t)align_size(fs, 4);
+    if (fs->bank_size < (uint32_t)HEADER_BYTES + fs->slot_size + fs->write_size + fs->crc_size) {
+        return ZNVS_EINVAL;
+    }
+    fs->cfg = cfg;
+    fs->arg = arg;
     return znvs_mount(fs);
 }
 
 int znvs_mount(znvs_t *fs)
 {
     struct entry entry;
-    uint32_t sequence[2] = {0, 0};
+    uint32_t sequence[2];
     uint32_t bank_size;
     int a, b, rc;
     if (!fs || !fs->cfg) {
@@ -484,7 +496,7 @@ int znvs_mount(znvs_t *fs)
             return rc ? rc : ZNVS_EIO;
         }
         encode(expected, format_magic(fs), 0);
-        memcpy(expected + META_BYTES, expected, META_BYTES);
+        memcpy(expected + HEADER_COPY_BYTES, expected, HEADER_COPY_BYTES);
         for (i = 0; i < sizeof(raw); ++i) {
             if ((raw[i] & expected[i]) != expected[i]) {
                 return ZNVS_ECORRUPT;
@@ -497,6 +509,7 @@ int znvs_mount(znvs_t *fs)
             return ZNVS_EIO;
         }
         a = 1;
+        sequence[0] = 0;
 #endif
     }
     if (a && b && sequence[1] - sequence[0] != 1 && sequence[0] - sequence[1] != 1) {

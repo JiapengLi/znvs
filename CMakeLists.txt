@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(znvs VERSION 2.0.0 LANGUAGES C)
+project(znvs VERSION 1.0.0 LANGUAGES C)
 
 set(ZNVS_PROFILE full CACHE STRING "Library features: full, boot, readonly")
 set_property(CACHE ZNVS_PROFILE PROPERTY STRINGS full boot readonly)

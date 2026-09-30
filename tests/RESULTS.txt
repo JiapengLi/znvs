@@ -1,141 +1,81 @@
-ZNVS v2 validation / 验证记录
+ZNVS 1.0.0 validation / 首版验证记录
 Date: 2026-09-30
 
-FORMAT / CONFIGURATION
-v2 media and instance ABI are incompatible with v1/Zephyr NVS.
-Export old values before explicit migration; no in-place format upgrade is claimed.
-One private build choice: full / boot / readonly. Public header has no configuration macros.
-All builds use CRC32 and the same ABI/media; geometry lives only in znvs_cfg_t.
+CONFIGURATION
+Builds: full / boot / readonly; shared public ABI and flash format.
+Fixed CRC32, runtime geometry, no heap or persistent lookup cache.
 
 SOURCE SHA-256
-  znvs/znvs.c: 90b8378e850edbe1b2c73c26f327222d29cdf7ceef547c13a050a8e3e38f2f01
-  znvs/znvs.h: 5a6dd1f14d05299bff49c406e35bb87d4f7cad0d9b1652c1262fc5b9b7984f0f
+  znvs/znvs.c: a2b9423440e68694380eaa3d05be292a6e9b7eb451e592fca858239f1be89036
+  znvs/znvs.h: 88d756c49c771e0e856441527a7477117c1b88aa094792789d6f57e5f994e1f6
 
-HOST REGRESSION
+HOST TESTS
 gcc (Rev3, Built by MSYS2 project) 16.2.0
-Command: python tools/check.py --cc gcc
-NOR model: prefix cuts and arbitrary bit subsets across each failed write/erase callback.
-Geometry coverage: write granules 1, 2, 4, 8, 16, 32 bytes.
-Regressions: ID 0 -> 473 alias, committed metadata single-bit faults, deletion resurrection,
-both bank-header copies, initial-header recovery, GC CRC checks, and zero-mutation ENOSPC.
+Command: python tools/check.py --cc gcc --out _build/first-release/matrix
+NOR faults: prefix cuts and arbitrary subsets of bits in failed write/erase operations.
+Write granules: 1, 2, 4, 8, 16, 32 bytes.
+Coverage: metadata/payload corruption, interrupted initialization and GC,
+reserved space, deletion, full media, mismatched geometry, foreign signatures,
+sequence wrap, and full/boot/readonly interoperability.
 
 ZNVS test: fixed CRC32, sizeof(znvs_t)=40 cfg=40
-PASS checks=50346559 random_operations=32400 fault_scenarios=94819
+PASS checks=52950343 random_operations=32400 fault_scenarios=101070
 
-PASS upstream v4.4.2 host-adapted CRC32: 7200 logical-value comparisons, 396 v2-remount/v1-rejection checks
+PASS upstream v4.4.2 host-adapted CRC32: 7200 logical-value comparisons, 396 remount/foreign-format rejection checks
 
-PASS profiles: 1800 alternating full/boot writes, read-only checks, 11168 unordered boot-GC failures across 6 write geometries
+PASS profiles: 1800 alternating full/boot writes, read-only checks, 11936 unordered boot-GC failures across 6 write geometries
 
-Counts: 32400 random operations + 1800 cross-profile operations;
-94819 main fault scenarios + 11168 boot-GC fault scenarios.
-Sanitizer reruns and additional bit-corruption tests are not added to these counts.
+Fault scenarios: 101070 main + 11936 boot-GC = 113006; sanitizer repeats are not added.
 
 SANITIZERS
 clang version 22.1.8 (https://github.com/msys2/MINGW-packages 6e4e79c2f86eeb534e324e583f2057dc9fd5ecab)
-Command: python tools/check.py --cc clang --sanitize-only
+Command: python tools/check.py --cc clang --sanitize-only --out _build/first-release/sanitize
 
 ZNVS test: fixed CRC32, sizeof(znvs_t)=40 cfg=40
-PASS checks=50346559 random_operations=32400 fault_scenarios=94819
+PASS checks=52950343 random_operations=32400 fault_scenarios=101070
 
-PASS profiles: 1800 alternating full/boot writes, read-only checks, 11168 unordered boot-GC failures across 6 write geometries
+PASS profiles: 1800 alternating full/boot writes, read-only checks, 11936 unordered boot-GC failures across 6 write geometries
 
-BUILD / INTERFACE / STYLE
-PASS: make all test demo, make PROFILE=boot, make PROFILE=readonly (strict C99 warnings).
-PASS: CMake full/boot/readonly builds; full ctest 1/1.
-PASS: C++11 header and linkage against the separately compiled boot C object.
-PASS: Clang static analysis of all three profiles, no diagnostics.
-PASS: clang-format --dry-run --Werror; git diff --check.
-Modified tracked files preserve LF; new files use LF.
+BUILD
+PASS: Make full library, example and test; CMake configure/build and ctest 1/1.
+PASS: all three profiles compile in the host matrix; strict C99 warnings.
+PASS: clang-format and git diff --check. Files use LF.
 
 CORTEX-M3 SIZE / MODULE-LOCAL STACK
 clang version 22.1.8 (https://github.com/msys2/MINGW-packages 6e4e79c2f86eeb534e324e583f2057dc9fd5ecab)
-Command: python tools/measure.py --clang clang --size llvm-size --nm llvm-nm
-Object flags: --target=arm-none-eabi -mcpu=cortex-m3 -mthumb -std=c99 -Oz -ffreestanding -fno-builtin -fstack-usage -Wall -Wextra -Werror -Wpedantic
-Linked flags additionally: -flto -nostdlib --gc-sections.
-Retained API roots: init/read/write/delete for RW; init/read for RO.
-All measurements use runtime geometry, with no fixed bank or write-size defines.
+Command: python tools/measure.py --clang clang --size llvm-size --nm llvm-nm --max-boot-rom 2096
+Flags: Cortex-M3 Thumb, -std=c99 -Oz -ffreestanding -fno-builtin; link -flto --gc-sections.
+Linked roots: init/read/write/delete for RW; init/read for RO.
 
-full: object_text=3004 data=0 bss=0 instance=32 cfg=24
-  linked_module=2484 C_support=60 combined=2544
-  znvs_write conservative module-local stack <= 376 bytes
-boot: object_text=2278 data=0 bss=0 instance=32 cfg=24
-  linked_module=2064 C_support=32 combined=2096
-  znvs_write conservative module-local stack <= 280 bytes
-readonly: object_text=1114 data=0 bss=0 instance=32 cfg=24
-  linked_module=960 C_support=0 combined=960
-  znvs_read conservative module-local stack <= 136 bytes
+full: ROM=2544 (module=2484 + support=60), object_text=3018, instance=32, cfg=24
+  znvs_write local stack bound=376; static data=0, bss=0
+boot: ROM=2096 (module=2064 + support=32), object_text=2272, instance=32, cfg=24
+  znvs_write local stack bound=280; static data=0, bss=0
+readonly: ROM=982 (module=982 + support=0), object_text=1130, instance=32, cfg=24
+  znvs_read local stack bound=136; static data=0, bss=0
 
-boot combined ROM is 2096 B (48 B above a strict 2048 B ceiling).
-ROM includes ARM unwind data, excludes real flash port, startup, vectors and application data.
-Support memcpy/memset/memcmp is compiled separately without LTO; exact retained bytes are reported.
-Stack bounds sum compiler frames on local call paths, including conservative tail-call sums.
-Driver/C-library/helper/interrupt stacks are excluded; these are not on-device task-stack peaks.
+ROM includes ARM unwind data and separately compiled size-only C support.
+Flash port, startup, vectors and application buffers are excluded.
+Stack is a compiler-frame bound for local calls, excluding driver/libc/interrupt stacks.
 
-CALLBACK COUNTS (FULL PROFILE)
+CALLBACK COUNTS
+8192-byte partition, two 4096-byte banks, W=4; distinct keys each holding 4 bytes.
+Full profile; no prior update history. Counts are not on-device latency.
 
 BENCH configuration: CRC32, no lookup cache, 32-byte I/O/GC buffers
-BENCH keys=16 op=blank-init reads=259 read_bytes=8273 writes=1 erases=0
-BENCH keys=16 op=empty-remount reads=3 read_bytes=81 writes=0 erases=0
-BENCH keys=16 op=read-oldest reads=18 read_bytes=280 writes=0 erases=0
-BENCH keys=16 op=rotate reads=192 read_bytes=4768 writes=65 erases=1
-BENCH keys=32 op=blank-init reads=259 read_bytes=8273 writes=1 erases=0
-BENCH keys=32 op=empty-remount reads=3 read_bytes=81 writes=0 erases=0
-BENCH keys=32 op=read-oldest reads=34 read_bytes=552 writes=0 erases=0
-BENCH keys=32 op=rotate reads=256 read_bytes=5440 writes=129 erases=1
-BENCH keys=64 op=blank-init reads=259 read_bytes=8273 writes=1 erases=0
-BENCH keys=64 op=empty-remount reads=3 read_bytes=81 writes=0 erases=0
-BENCH keys=64 op=read-oldest reads=66 read_bytes=1096 writes=0 erases=0
-BENCH keys=64 op=rotate reads=384 read_bytes=6784 writes=257 erases=1
-BENCH keys=128 op=blank-init reads=259 read_bytes=8273 writes=1 erases=0
-BENCH keys=128 op=empty-remount reads=3 read_bytes=81 writes=0 erases=0
-BENCH keys=128 op=read-oldest reads=130 read_bytes=2184 writes=0 erases=0
-BENCH keys=128 op=rotate reads=640 read_bytes=9472 writes=513 erases=1
-BENCH keys=26 op=write-full reads=52 read_bytes=884 writes=0 erases=0
+BENCH keys=8 op=blank-init reads=259 read_bytes=8277 writes=1 erases=0
+BENCH keys=8 op=empty-remount reads=3 read_bytes=85 writes=0 erases=0
+BENCH keys=8 op=read-oldest reads=10 read_bytes=176 writes=0 erases=0
+BENCH keys=8 op=rotate reads=160 read_bytes=4496 writes=33 erases=1
+BENCH keys=32 op=blank-init reads=259 read_bytes=8277 writes=1 erases=0
+BENCH keys=32 op=empty-remount reads=3 read_bytes=85 writes=0 erases=0
+BENCH keys=32 op=read-oldest reads=34 read_bytes=680 writes=0 erases=0
+BENCH keys=32 op=rotate reads=256 read_bytes=5696 writes=129 erases=1
+BENCH keys=64 op=blank-init reads=259 read_bytes=8277 writes=1 erases=0
+BENCH keys=64 op=empty-remount reads=3 read_bytes=85 writes=0 erases=0
+BENCH keys=64 op=read-oldest reads=66 read_bytes=1352 writes=0 erases=0
+BENCH keys=64 op=rotate reads=384 read_bytes=7296 writes=257 erases=1
+BENCH keys=26 op=write-full reads=52 read_bytes=1092 writes=0 erases=0
 
-V1 BASELINE (same Cortex-M3 -Oz object measurement, default configuration)
-object_text=4680 B; instance=20 B; module-local write stack bound=488 B.
-128-key GC: 17287 reads, 258 writes, 1 erase. Repeated ENOSPC: 352 writes, 2 erases.
-V2 full 128-key GC: 640 reads, 513 writes, 1 erase. ENOSPC: 0 writes, 0 erases.
-Callback counts are not elapsed hardware latency. Independent commit increases write calls.
-
-Raw logs, binaries and JSON metrics: _build/clean-validation/ (ignored build artifacts).
-Original upstream reference sources are unchanged and verified by tools/check.py.
-
-MATCHED V1/V2 PERFORMANCE FOLLOW-UP
-Same workload: 8192-byte partition, two 4096-byte banks/sectors, W=4, CRC32, no lookup cache.
-128 distinct keys with 4-byte values. Write/delete counts below exclude GC.
-Raw benchmark source: _build/perf-compare.c; v1 uses _build/v1-baseline/.
-
-V1
-blank-init reads=770 bytes=12288 writes=1 erases=0
-empty-remount reads=771 bytes=12288 writes=0 erases=0
-populated-remount reads=580 bytes=9224 writes=0 erases=0
-read-oldest reads=131 bytes=1040 writes=0 erases=0
-read-newest reads=4 bytes=24 writes=0 erases=0
-read-missing reads=131 bytes=1048 writes=0 erases=0
-write-same reads=131 bytes=1040 writes=0 erases=0
-rotate reads=17287 bytes=141368 writes=258 erases=1
-write-new-key reads=131 bytes=1048 writes=3 erases=0
-write-changed reads=3 bytes=20 writes=3 erases=0
-delete reads=2 bytes=16 writes=1 erases=0
-
-V2
-blank-init reads=259 bytes=8273 writes=1 erases=0
-empty-remount reads=3 bytes=81 writes=0 erases=0
-populated-remount reads=131 bytes=2257 writes=0 erases=0
-read-oldest reads=130 bytes=2184 writes=0 erases=0
-read-newest reads=3 bytes=25 writes=0 erases=0
-read-missing reads=128 bytes=2176 writes=0 erases=0
-write-same reads=130 bytes=2184 writes=0 erases=0
-rotate reads=640 bytes=9472 writes=513 erases=1
-write-new-key reads=128 bytes=2176 writes=4 erases=0
-write-changed reads=2 bytes=21 writes=4 erases=0
-delete reads=1 bytes=17 writes=2 erases=0
-
-V1 matched linked size: .text=4096, .rodata=80, .ARM.exidx=16, ROM total=4192 B.
-V1 support included: memcpy=18, memset=14, memcmp=28, __aeabi_memclr4=8 (68 B).
-V1 module excluding support=4124 B; V2 full=2484+60=2544 B; V2 boot=2064+32=2096 B.
-Same Clang 22.1.8/Cortex-M3/-Oz/-flto/--gc-sections and init/read/write/delete roots.
-The required v1 __aeabi_memclr4 wrapper and common C support were compiled without LTO.
-Initial blank mount was previously mislabeled as empty remount in the v1 probe: 770 vs 771 reads respectively.
-No MCU timing or flash throughput has been measured.
+Raw logs and metrics: _build/first-release/ (ignored build artifacts).
+Host validation does not include on-device power-cut, ECC or driver timing tests.

@@ -215,7 +215,7 @@ static void test_basic(void)
     CHECK(znvs_read(&zero, 0, small, sizeof(small), &n) == ZNVS_ESTATE);
     CHECK(znvs_init(&fs, &c, &flash) == 0);
     CHECK(znvs_arg(&fs) == &flash && znvs_arg(NULL) == NULL);
-    CHECK(znvs_max_size(&fs) == c.size / 2U - 32U - 20U - 4U);
+    CHECK(znvs_max_size(&fs) == c.size / 2U - 32U - 24U - 4U);
     CHECK(znvs_available(&fs) <= znvs_max_size(&fs));
     expect(&fs, 0, NULL, 0);
     CHECK(znvs_write(&fs, 0, a, sizeof(a) - 1) == 0);
@@ -614,7 +614,8 @@ static void test_power_loss(void)
         sweep_operation(&c, model, 0, &after, 1, 0);
     }
 }
-#include "test_v2_cases.h"
+#include "test_recovery.h"
+#include "test_integrity.h"
 
 int main(void)
 {
@@ -625,7 +626,8 @@ int main(void)
     test_random();
     test_full_and_errors();
     test_power_loss();
-    test_v2();
+    test_recovery();
+    test_integrity();
     printf("PASS checks=%" PRIu64 " random_operations=%" PRIu64
            " fault_scenarios=%" PRIu64 "\n",
            checks, random_steps, fault_cases);

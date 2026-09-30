@@ -1,5 +1,5 @@
 /*
- * ZNVS v2 NOR journal. Incompatible with v1/Zephyr NVS media.
+ * ZNVS NOR journal.
  * SPDX-License-Identifier: Apache-2.0
  */
 #ifndef ZNVS_H
@@ -54,6 +54,7 @@ typedef struct {
  * All operations on an instance, including reads, require external serialization.
  * Callbacks must not re-enter it. Not an ISR API. Separate partitions may use
  * separate instances; serialize shared flash hardware in the port as needed.
+ * One active writer per partition. Remount other instances after external writes.
  */
 struct znvs_pos {
     uint32_t data;
@@ -81,7 +82,7 @@ struct znvs {
  * Configure and mount. No need to pre-zero *fs. Does NOT erase on a mount error.
  * Recovery selects a fully published bank. Only blank media or an interrupted
  * first header on otherwise blank media is initialized automatically.
- * Read-only and bootloader builds require an existing v2 partition.
+ * Read-only and bootloader builds require an initialized partition.
  * Format is available only in the full read/write build.
  */
 int znvs_init(znvs_t *fs, const znvs_cfg_t *cfg, void *arg);

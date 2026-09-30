@@ -6,7 +6,7 @@ static void test_committed_corruption(void)
     uint32_t metadata, header, payload;
     unsigned bit;
     size_t n;
-    test_name = "v2/committed-metadata/no-rollback/no-resurrection";
+    test_name = "recovery/committed-metadata/no-rollback/no-resurrection";
     fresh(&flash, &c);
     CHECK(znvs_init(&fs, &c, &flash) == 0);
     CHECK(znvs_write(&fs, 7, "OLD", 4) == 0);
@@ -36,7 +36,7 @@ static void test_committed_corruption(void)
     flash = saved;
     for (bit = 0; bit < 8; ++bit) {
         flash = saved;
-        bytes(&flash)[metadata + 16] ^= (uint8_t)(1U << bit);
+        bytes(&flash)[metadata + 20] ^= (uint8_t)(1U << bit);
         CHECK(znvs_init(&fs, &c, &flash) == 0);
         expect(&fs, 7, NULL, 0);
     }
@@ -53,7 +53,7 @@ static void test_committed_corruption(void)
         CHECK(znvs_init(&fs, &c, &flash) == 0);
         expect(&fs, 7, "NEW", 4);
     }
-    test_name = "v2/GC-validates-payload/retains-source-on-corruption";
+    test_name = "recovery/GC-validates-payload/retains-source-on-corruption";
     fresh(&flash, &c);
     CHECK(znvs_init(&fs, &c, &flash) == 0);
     CHECK(znvs_write(&fs, 7, "OLD", 4) == 0);
@@ -74,9 +74,9 @@ static void test_committed_corruption(void)
 static int alias_failure(void *arg, uint32_t off, const void *data, size_t len)
 {
     const uint8_t *src = data;
-    uint8_t partial[16];
-    if (len == 16 && src[0] == 0 && src[1] == 0) {
-        memcpy(partial, src, 16);
+    uint8_t partial[20];
+    if (len == 20 && src[0] == 0 && src[1] == 0) {
+        memcpy(partial, src, sizeof(partial));
         partial[0] = 0xd9;
         partial[1] = 1;
         CHECK(sim_write(arg, off, partial, sizeof(partial)) == 0);
@@ -85,12 +85,12 @@ static int alias_failure(void *arg, uint32_t off, const void *data, size_t len)
     return sim_write(arg, off, data, len);
 }
 
-static void test_original_alias(void)
+static void test_partial_metadata_alias(void)
 {
     znvs_cfg_t c = config(1024, 2, 4);
     znvs_t fs;
     size_t n;
-    test_name = "v2/regression/failed-id0-must-not-overwrite-id473";
+    test_name = "recovery/regression/failed-id0-must-not-overwrite-id473";
     c.write = alias_failure;
     fresh(&flash, &c);
     CHECK(znvs_init(&fs, &c, &flash) == 0);
@@ -113,7 +113,7 @@ static void test_unordered_failures(void)
     unsigned k, phase, seed, operation, operations;
     uint64_t mutations;
     for (phase = 0; phase < 3; ++phase) {
-        test_name = "v2/unordered-program-and-erase";
+        test_name = "recovery/unordered-program-and-erase";
         fresh(&flash, &c);
         CHECK(znvs_init(&fs, &c, &flash) == 0);
         for (k = 0; k < KEYS; ++k) {
@@ -169,7 +169,7 @@ static void test_first_header(void)
     znvs_cfg_t c = config(1024, 2, 4);
     znvs_t fs;
     unsigned cut, bit;
-    test_name = "v2/first-header/interrupted-recovery";
+    test_name = "recovery/first-header/interrupted-recovery";
     for (cut = 0; cut <= 32; ++cut) {
         fresh(&flash, &c);
         flash.cut = cut;
@@ -198,7 +198,7 @@ static void test_filter_collisions(void)
     value_t model[KEYS] = {{0, {0}}};
     uint32_t seed = 0x317853ac;
     unsigned step, k, id;
-    test_name = "v2/GC-filter-collisions-and-deletions";
+    test_name = "recovery/GC-filter-collisions-and-deletions";
     fresh(&flash, &c);
     CHECK(znvs_init(&fs, &c, &flash) == 0);
     for (step = 0; step < 1200; ++step) {
@@ -218,9 +218,9 @@ static void test_filter_collisions(void)
     }
 }
 
-static void test_v2(void)
+static void test_recovery(void)
 {
-    test_original_alias();
+    test_partial_metadata_alias();
     test_committed_corruption();
     test_unordered_failures();
     test_first_header();

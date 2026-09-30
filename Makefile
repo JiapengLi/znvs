@@ -28,7 +28,7 @@ $(OUT)/libznvs.a: $(OUT)/znvs.o
 	$(AR) rcs $@ $^
 $(OUT)/demo: examples/basic.c $(OUT)/libznvs.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) $< $(OUT)/libznvs.a $(LDFLAGS) $(LDLIBS) -o $@
-$(OUT)/test: tests/test_znvs.c tests/test_v2_cases.h $(OUT)/libznvs.a
+$(OUT)/test: tests/test_znvs.c tests/test_recovery.h tests/test_integrity.h $(OUT)/libznvs.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) $< $(OUT)/libznvs.a $(LDFLAGS) $(LDLIBS) -o $@
 test: $(OUT)/test
 	$(OUT)/test > $(OUT)/test.log

@@ -1,4 +1,4 @@
-/* Logical-value comparison with upstream; v2 must reject v1 media unchanged.
+/* Logical-value comparison with upstream; foreign media must remain unchanged.
  * SPDX-License-Identifier: Apache-2.0 */
 #include "znvs.h"
 #include "ref_shim.h"
@@ -103,6 +103,6 @@ int main(void)
             }
         }
     }
-    printf("PASS upstream v4.4.2 host-adapted CRC32: %u logical-value comparisons, %u v2-remount/v1-rejection checks\n", comparisons, cross_mounts);
+    printf("PASS upstream v4.4.2 host-adapted CRC32: %u logical-value comparisons, %u remount/foreign-format rejection checks\n", comparisons, cross_mounts);
     return 0;
 }

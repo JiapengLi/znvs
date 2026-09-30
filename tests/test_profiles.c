@@ -1,4 +1,4 @@
-/* Full application, compact bootloader and read-only builds share v2 media. */
+/* Full application, compact bootloader and read-only builds share one media format. */
 #define main full_suite_main
 #include "test_znvs.c"
 #undef main

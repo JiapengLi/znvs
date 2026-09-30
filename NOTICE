@@ -1,7 +1,7 @@
-ZNVS v2 - compact two-bank NOR journal
+ZNVS - compact two-bank NOR journal
 Prepared 2026-09-30. Apache License, Version 2.0; see LICENSE.
 
-The original ZNVS v1 implementation was derived from Zephyr v4.4.2:
+Source provenance: Zephyr v4.4.2 NVS implementation
 https://github.com/zephyrproject-rtos/zephyr/tree/v4.4.2/subsys/kvss/nvs
   subsys/kvss/nvs/nvs.c
   Git blob SHA-1: fd6dd480d5712c08f5275830fb21e5b05f25df38
@@ -11,7 +11,7 @@ https://github.com/zephyrproject-rtos/zephyr/tree/v4.4.2/subsys/kvss/nvs
   Copyright (c) 2026 Lingao Meng
   SPDX-License-Identifier: Apache-2.0
 
-Public interface was redesigned, not copied verbatim from Zephyr's nvs.h.
+The public interface was redesigned, not copied verbatim from Zephyr's nvs.h.
 Reference header inspected:
   include/zephyr/kvss/nvs.h, v4.4.2
   Git blob SHA-1: c431e1655ac216f1f4f424bd1dc95e52dd22a512
@@ -25,36 +25,25 @@ https://github.com/JiapengLi/zat
   Inspiration: explicit instance; caller-owned memory; callback + void *arg;
   prefixed API; status return convention, including EINVAL/ENOSPC/EIO values.
 
-Historical v1 standalone modifications:
-- Combined private implementation into one .c file and added one public .h.
-- Removed Zephyr kernel, mutex, device, flash, logging, Kconfig and errno dependencies.
-- Added partition-relative synchronous callbacks with normalized error results.
-- Added geometry, reserved-ID, size/narrowing, alignment and I/O bounds checks.
-- Added explicit little-endian metadata/CRC encoding and small read-only CRC tables.
-- Compile-time optional small hashed lookup cache; no heap or full key index.
-- Propagate sector-close and early startup read failures; invalidate state on I/O errors.
-- Strict full-value/status-based read API; corrected historical-version boundary handling.
-- Same-value writes repair a damaged stored CRC rather than skipping that write.
-- Harden close-ATE bounds; use unsigned sector-address shifts and sector-relative cleanup.
-- Linear backward orphan-data scan in startup; safe O(1) current-sector availability query.
-- Explicit destructive format only; no automatic full-format on mount failure.
-- All instance operations require application-level serialization.
+Standalone implementation:
+- Replaced the sector ring with two-bank snapshot publication and duplicate
+  complemented bank headers. The media format is specific to this library.
+- Added complemented record metadata with a separate CRC32, an independent
+  commit block, and ID/length-bound payload CRC32.
+- Preserve reservations after interrupted programming; validate committed
+  metadata before key lookup, including deletion records.
+- Check live-data capacity before erase and verify payload CRC during GC.
+- Removed Zephyr kernel, device, flash, logging, Kconfig and errno dependencies.
+- Use synchronous partition-relative callbacks, caller-owned instances and
+  application-level serialization, without dynamic allocation.
+- Provide full, boot and readonly builds sharing one public ABI and media
+  format, with runtime flash geometry and fixed CRC32 and I/O buffers.
 
-v2 redesign (2026-09-30):
-- Replaced the sector ring/packed streaming GC with two-bank snapshot publication.
-- Changed the on-flash format: complemented metadata, an independent record commit
-  block, duplicate complemented bank headers, and ID/length-bound payload CRC32.
-- Preserve reservations after interrupted programming; reject invalid committed
-  metadata rather than falling back to old records or resurrecting deletions.
-- Check live-data capacity before erase and verify payload CRC during GC copying.
-- Optional temporary GC filter, fixed-geometry bootloader and read-only builds.
-- Full/boot/read-only media interoperability and broader unordered NOR fault tests.
-- The v1 byte-image compatibility claim no longer applies. Upstream remains a
-  logical-value reference and a source of legacy images that v2 must reject.
-
-Tests/upstream contains the two original source files listed above UNMODIFIED.
+tests/upstream contains the two original source files listed above UNMODIFIED.
 Its include/ref_shim.h is a TEST-ONLY host adapter for independent execution of
 that upstream algorithm; it is not Zephyr and is not a production dependency.
+Tests compare logical behavior; they do not imply media-format compatibility.
+
 New tests, build scripts, example and the standalone interface are supplied under
 Apache-2.0. No Zephyr board-level execution, hardware certification, or universal
 power-failure guarantee is represented by the host test results.

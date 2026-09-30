@@ -90,7 +90,7 @@ def main():
     ap.add_argument("--size", default="size")
     ap.add_argument("--nm", default="nm")
     ap.add_argument("--out", default="_build/measure")
-    ap.add_argument("--max-boot-rom", type=int, help="Optional boot linked module ROM budget in bytes; excludes separately reported C support")
+    ap.add_argument("--max-boot-rom", type=int, help="Optional boot linked ROM budget in bytes, including the reported C support")
     args = ap.parse_args()
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -150,7 +150,7 @@ def main():
     (out / "metrics.json").write_text(json.dumps(report, indent=2) + "\n")
     print("Detailed metrics: " + str(out / "metrics.json"))
     if args.max_boot_rom is not None:
-        actual = next(row["linked_module_rom_bytes"] for row in rows if row["profile"] == "boot")
+        actual = next(row["linked_rom_with_support_bytes"] for row in rows if row["profile"] == "boot")
         if actual > args.max_boot_rom:
             raise RuntimeError("boot ROM budget exceeded: %d > %d" % (actual, args.max_boot_rom))
 
