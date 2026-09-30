@@ -1,0 +1,48 @@
+ZNVS - standalone extraction of Zephyr NVS
+Prepared 2026-09-30. Apache License, Version 2.0; see LICENSE.
+
+Production implementation derived from Zephyr v4.4.2:
+https://github.com/zephyrproject-rtos/zephyr/tree/v4.4.2/subsys/kvss/nvs
+  subsys/kvss/nvs/nvs.c
+  Git blob SHA-1: fd6dd480d5712c08f5275830fb21e5b05f25df38
+  subsys/kvss/nvs/nvs_priv.h
+  Git blob SHA-1: 5d9e9dcdaa6d8c931ca36c6c7649f99fa9640dc5
+  Copyright (c) 2018 Laczen
+  Copyright (c) 2026 Lingao Meng
+  SPDX-License-Identifier: Apache-2.0
+
+Public interface was redesigned, not copied verbatim from Zephyr's nvs.h.
+Reference header inspected:
+  include/zephyr/kvss/nvs.h, v4.4.2
+  Git blob SHA-1: c431e1655ac216f1f4f424bd1dc95e52dd22a512
+  Copyright (c) 2018 Laczen
+
+Style reference (no ZAT implementation is bundled):
+https://github.com/JiapengLi/zat
+  zat/zat.h, Git blob SHA-1: b7ef6c43493f77cba73125f1a7619abef49394bd
+  Copyright 2026 Jiapeng Li <main@jiapeng.me>
+  Apache-2.0
+  Inspiration: explicit instance; caller-owned memory; callback + void *arg;
+  prefixed API; status return convention, including EINVAL/ENOSPC/EIO values.
+
+Standalone modifications:
+- Combined private implementation into one .c file and added one public .h.
+- Removed Zephyr kernel, mutex, device, flash, logging, Kconfig and errno dependencies.
+- Added partition-relative synchronous callbacks with normalized error results.
+- Added geometry, reserved-ID, size/narrowing, alignment and I/O bounds checks.
+- Added explicit little-endian metadata/CRC encoding and small read-only CRC tables.
+- Compile-time optional small hashed lookup cache; no heap or full key index.
+- Propagate sector-close and early startup read failures; invalidate state on I/O errors.
+- Strict full-value/status-based read API; corrected historical-version boundary handling.
+- Same-value writes repair a damaged stored CRC rather than skipping that write.
+- Harden close-ATE bounds; use unsigned sector-address shifts and sector-relative cleanup.
+- Linear backward orphan-data scan in startup; safe O(1) current-sector availability query.
+- Explicit destructive format only; no automatic full-format on mount failure.
+- All instance operations require application-level serialization.
+
+Tests/upstream contains the two original source files listed above UNMODIFIED.
+Its include/ref_shim.h is a TEST-ONLY host adapter for independent execution of
+that upstream algorithm; it is not Zephyr and is not a production dependency.
+New tests, build scripts, example and the standalone interface are supplied under
+Apache-2.0. No Zephyr board-level execution, hardware certification, or universal
+power-failure guarantee is represented by the host test results.

@@ -1,0 +1,7 @@
+_build/
+build/
+__pycache__/
+*.o
+*.a
+*.su
+*.exe
